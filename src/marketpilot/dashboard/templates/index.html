@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MarketPilot RC-1 Mission Control</title>
+    <link href="/static/style.css" rel="stylesheet">
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</head>
+<body>
+    <header style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <h1 style="margin: 0; font-size: 1.5rem; color: var(--accent-blue);">MarketPilot Mission Control</h1>
+            <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 5px;">
+                Observability & Operational Status
+            </div>
+        </div>
+        <div>
+            <span class="pill ok">RC-1</span>
+            <span class="pill ok">OPERATIONAL</span>
+            <span class="pill err">Architecture FROZEN</span>
+            <span class="pill ok">Research ACTIVE</span>
+            <span class="pill ok">Campaign Dry Run</span>
+            <span class="pill">Day 1/7</span>
+        </div>
+    </header>
+
+    <div style="margin-bottom: 20px;">
+        <form hx-post="/api/halt" hx-target="#control-status" style="display:inline;">
+            <input type="hidden" name="control_key" value="demo_key"> <!-- Read from env ideally -->
+            <button type="submit" style="background:var(--accent-red); color:white; border:none; padding:10px 15px; border-radius:5px; cursor:pointer; font-weight:bold;">?? HALT DAEMON</button>
+        </form>
+        <form hx-post="/api/resume" hx-target="#control-status" style="display:inline;">
+            <input type="hidden" name="control_key" value="demo_key">
+            <button type="submit" style="background:var(--accent-green); color:white; border:none; padding:10px 15px; border-radius:5px; cursor:pointer; font-weight:bold;">?? RESUME DAEMON</button>
+        </form>
+        <span id="control-status" style="margin-left: 15px;"></span>
+    </div>
+
+    <!-- Auto-updating container using HTMX -->
+    <div id="dashboard-content" hx-get="/fragments/health" hx-trigger="load, every 5s" hx-swap="innerHTML">
+        <div class="dashboard-grid">
+            <div class="card">
+                <h2>Loading Status...</h2>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

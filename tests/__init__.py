@@ -1,0 +1,1 @@
+"""MarketPilot test suite."""

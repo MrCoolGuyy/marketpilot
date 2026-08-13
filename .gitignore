@@ -5,6 +5,35 @@ build/
 dist/
 wheels/
 *.egg-info
+pytest_errors*.txt
 
 # Virtual environments
 .venv
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+config/credentials.yaml
+config/secrets.yaml
+
+# Database
+*.db
+*.sqlite3
+
+# Logs
+logs/
+
+# Data
+data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+

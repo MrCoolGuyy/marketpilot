@@ -1,0 +1,33 @@
+<div class="dashboard-grid">
+    <div class="card" style="grid-column: 1 / -1; display:flex; justify-content: space-between; align-items:center;">
+        <h2 style="margin:0;">Promotion Gate Status</h2>
+        <span class="pill {% if report.promotion == 'READY' %}ok{% else %}err{% endif %}">{{ report.promotion }}</span>
+    </div>
+    
+    <div class="card">
+        <h2>Exchange Integrity</h2>
+        <p><strong>Status:</strong> <span class="pill {% if report.exchange.status == 'PASS' %}ok{% else %}err{% endif %}">{{ report.exchange.status }}</span></p>
+        <p><strong>Reachable:</strong> {{ report.exchange.reachable }}</p>
+        <p><strong>Latency:</strong> {{ "%.2f"|format(report.exchange.latency_ms) }} ms</p>
+        <p><strong>Clock Drift:</strong> {{ "%.2f"|format(report.exchange.clock_drift_ms) }} ms</p>
+    </div>
+    
+    <div class="card">
+        <h2>Position Reconciliation</h2>
+        <p><strong>Status:</strong> <span class="pill {% if report.position.status == 'PASS' %}ok{% else %}err{% endif %}">{{ report.position.status }}</span></p>
+        <p><strong>Details:</strong> {{ report.position.details }}</p>
+    </div>
+    
+    <div class="card">
+        <h2>Journal Integrity</h2>
+        <p><strong>Status:</strong> <span class="pill {% if report.journal.status == 'PASS' %}ok{% else %}err{% endif %}">{{ report.journal.status }}</span></p>
+        <p><strong>Duplicates:</strong> {{ report.journal.duplicates }}</p>
+        <p><strong>Orphans:</strong> {{ report.journal.orphans }}</p>
+    </div>
+    
+    <div class="card">
+        <h2>Dataset Completeness</h2>
+        <p><strong>Status:</strong> <span class="pill {% if report.dataset.status == 'PASS' %}ok{% else %}err{% endif %}">{{ report.dataset.status }}</span></p>
+        <p><strong>Features Complete:</strong> {{ report.dataset.features_complete }}</p>
+    </div>
+</div>

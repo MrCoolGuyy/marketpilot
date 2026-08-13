@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Decision Inspector: {{ decision_id }}</title>
+    <link href="/static/style.css" rel="stylesheet">
+</head>
+<body>
+    <header style="margin-bottom: 20px;">
+        <h1 style="margin: 0; font-size: 1.5rem; color: var(--accent-blue);">Decision Inspector</h1>
+        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 5px;">
+            ID: {{ decision_id }}
+        </div>
+    </header>
+
+    <div class="dashboard-grid">
+        {% if record %}
+        <div class="card" style="grid-column: 1 / -1;">
+            <h2>Pipeline Trace</h2>
+            <pre style="background: rgba(0,0,0,0.2); padding: 15px; border-radius: 5px; overflow-x: auto; color: var(--text-muted);">
+{{ record | tojson(indent=2) }}
+            </pre>
+        </div>
+        {% else %}
+        <div class="card">
+            <h2>Not Found</h2>
+            <p>No audit record found for decision ID {{ decision_id }}.</p>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

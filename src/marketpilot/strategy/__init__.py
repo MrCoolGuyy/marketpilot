@@ -1,0 +1,3 @@
+"""
+MarketPilot Strategy — Strategy module.
+"""

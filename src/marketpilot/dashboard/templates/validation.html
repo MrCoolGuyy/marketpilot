@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pre-Live Validation Framework</title>
+    <link href="/static/style.css" rel="stylesheet">
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</head>
+<body>
+    <header style="margin-bottom: 20px;">
+        <h1 style="margin: 0; font-size: 1.5rem; color: var(--accent-blue);">Pre-Live Validation Framework</h1>
+        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 5px;">
+            Read-Only Observability
+        </div>
+    </header>
+
+    <div id="validation-content" hx-get="/fragments/validation" hx-trigger="load, every 5s" hx-swap="innerHTML">
+        <div class="card">
+            <h2>Loading Validation State...</h2>
+        </div>
+    </div>
+</body>
+</html>

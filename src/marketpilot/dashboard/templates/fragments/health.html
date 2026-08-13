@@ -1,0 +1,52 @@
+<div class="dashboard-grid">
+    
+    <!-- Daemon Status -->
+    <div class="card">
+        <h2>Daemon Status</h2>
+        <div class="metric-row">
+            <span class="metric-label">Status</span>
+            <span class="metric-val {{ 'status-ok' if status.status == 'RUNNING' else 'status-err' }}">{{ status.status }}</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Version</span>
+            <span class="metric-val">{{ status.version }} ({{ status.rc_version }})</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Config Hash</span>
+            <span class="metric-val" style="font-family: monospace;">{{ status.config_hash }}</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Circuit Breaker</span>
+            <span class="metric-val {{ 'status-ok' if status.cb_state == 'NORMAL' else 'status-err' }}">{{ status.cb_state }}</span>
+        </div>
+    </div>
+
+    <!-- Health Monitor -->
+    <div class="card">
+        <h2>System Health</h2>
+        {% for component, state in status.health.items() %}
+        <div class="metric-row">
+            <span class="metric-label" style="text-transform: capitalize;">{{ component }}</span>
+            <span class="metric-val {{ 'status-ok' if state == 'OK' else 'status-err' }}">{{ state }}</span>
+        </div>
+        {% endfor %}
+        {% if not status.health %}
+        <div class="metric-row"><span class="metric-label">No health data available.</span></div>
+        {% endif %}
+    </div>
+    
+    <!-- Metrics -->
+    <div class="card">
+        <h2>Engine Metrics</h2>
+        {% for key, val in status.metrics.items() %}
+        <div class="metric-row">
+            <span class="metric-label" style="text-transform: capitalize;">{{ key }}</span>
+            <span class="metric-val">{{ val }}</span>
+        </div>
+        {% endfor %}
+        {% if not status.metrics %}
+        <div class="metric-row"><span class="metric-label">No metrics available.</span></div>
+        {% endif %}
+    </div>
+
+</div>
