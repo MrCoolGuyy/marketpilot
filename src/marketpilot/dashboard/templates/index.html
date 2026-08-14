@@ -26,18 +26,6 @@
         </div>
     </header>
 
-    <div style="margin-bottom: 20px;">
-        <form hx-post="/api/halt" hx-target="#control-status" style="display:inline;">
-            <input type="hidden" name="control_key" value="demo_key"> <!-- Read from env ideally -->
-            <button type="submit" style="background:var(--accent-red); color:white; border:none; padding:10px 15px; border-radius:5px; cursor:pointer; font-weight:bold;">?? HALT DAEMON</button>
-        </form>
-        <form hx-post="/api/resume" hx-target="#control-status" style="display:inline;">
-            <input type="hidden" name="control_key" value="demo_key">
-            <button type="submit" style="background:var(--accent-green); color:white; border:none; padding:10px 15px; border-radius:5px; cursor:pointer; font-weight:bold;">?? RESUME DAEMON</button>
-        </form>
-        <span id="control-status" style="margin-left: 15px;"></span>
-    </div>
-
     <!-- Auto-updating container using HTMX -->
     <div id="dashboard-content" hx-get="/fragments/health" hx-trigger="load, every 5s" hx-swap="innerHTML">
         <div class="dashboard-grid">

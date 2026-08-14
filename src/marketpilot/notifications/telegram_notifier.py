@@ -163,6 +163,9 @@ class TelegramNotifier(Notifier):
                 f"Config Hash: {d.get('config_hash', 'unknown')}\n"
             )
         elif event.event_type == NotificationType.CIRCUIT_BREAKER_HALTED:
-            return f"?? *HALTED*\nReason: {d.get('reason', 'Unknown')}"
+            msg = f"?? *HALTED*\nReason: {d.get('reason', 'Unknown')}"
+            if event.decision_id:
+                msg += f"\nDecision ID: {event.decision_id}"
+            return msg
         else:
             return f"*{event.event_type.value}*"

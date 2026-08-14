@@ -111,10 +111,57 @@ async def test_mission_control_lifecycle():
     
     journal = MagicMock()
     
-    pipeline = TradingPipeline(
-        bus, metrics, scanner, indicator, regime, strategy,
-        risk, audit, execution, reconciler, journal
+    ctx = MagicMock()
+    ctx.bus = bus
+    ctx.metrics = metrics
+    ctx.scanner = scanner
+    ctx.indicator = indicator
+    ctx.regime = regime
+    ctx.strategy = strategy
+    ctx.risk = risk
+    ctx.audit = audit
+    ctx.execution = execution
+    ctx.reconciler = reconciler
+    ctx.journal = journal
+    
+    ctx.settings.scanner.max_results = 5
+    ctx.settings.scanner.quote_coin = "USDT"
+    ctx.settings.scanner.min_turnover_24h = Decimal("1000000")
+    
+    fetcher = MagicMock()
+    from marketpilot.models.market_data import RawMarketData, AssetType, Ticker
+    raw_ticker = Ticker(
+        symbol="BTCUSDT", asset_type=AssetType.LINEAR, last_price="100", bid_price="100", ask_price="100",
+        high_24h="100", low_24h="100", price_change_percent_24h="1", volume_24h="100", turnover_24h="100", timestamp=datetime.now(UTC)
     )
+    raw_mock = RawMarketData(symbol="BTCUSDT", ticker=raw_ticker, klines=[], timestamp=time.time())
+    fetcher.fetch_scan_candidates = AsyncMock(return_value=[raw_mock])
+    ctx.market_data_fetcher = fetcher
+    
+    builder = MagicMock()
+    builder.build = MagicMock(return_value=mock_snapshot)
+    
+    from marketpilot.models.causal import SnapshotBuildResult, SnapshotBuildOutcome, ClosedInstrumentSnapshot, MarketFacts, MarketDataEnvironment
+    causal_snap = ClosedInstrumentSnapshot(
+        snapshot_id="test", symbol="BTCUSDT", interval=Interval.H1, environment=MarketDataEnvironment.MAINNET,
+        candle_open_time=0, candle_close_time=0, creation_timestamp=0, feature_set_version="1",
+        facts=MarketFacts(
+            open=Decimal(0), high=Decimal(0), low=Decimal(0), close=Decimal(100), volume=Decimal(0), turnover=Decimal(0),
+            spread_bps=Decimal(0), atr_percent=Decimal(0), momentum_24h=Decimal(0), trend_strength=Decimal(0), trend_age_candles=0
+        )
+    )
+    builder.build_causal = MagicMock(return_value=SnapshotBuildResult(outcome=SnapshotBuildOutcome.BUILT, snapshot=causal_snap))
+    ctx.snapshot_builder = builder
+    
+    ctx.client = MagicMock()
+    
+    from marketpilot.models.causal import SignalIntent, StrategyIdentity
+    ident = StrategyIdentity(registry_version="1", strategy_id="test", strategy_version="1", parameter_set_id="test")
+    intent = SignalIntent(intent_id="i", identity=ident, direction=SignalDirection.LONG, symbol="BTCUSDT", signal_timestamp=time.time(),
+                          logical_stop_loss=Decimal("90"), logical_take_profit=Decimal("110"), provenance_snapshot_id="test")
+    strategy.evaluate = MagicMock(return_value=([intent], EngineMetadata(processing_time_ms=1.0)))
+    
+    pipeline = TradingPipeline(ctx)
     
     health = HealthMonitor(metrics, cb)
     watchdog = Watchdog(ts, cb)
@@ -134,20 +181,14 @@ async def test_mission_control_lifecycle():
     await asyncio.sleep(0.5)
     
     scanner.evaluate.assert_called_once()
-    indicator.calculate.assert_called_once()
-    regime.determine_regime.assert_called_once()
-    strategy.evaluate_all.assert_called_once()
-    risk.evaluate.assert_called_once()
-    audit.audit_decision.assert_called_once()
-    execution.execute.assert_called_once()
-    reconciler.reconcile.assert_called_once()
+    strategy.evaluate.assert_called_once()
+    # Indicator, regime, risk, audit, execution, reconciler are NO LONGER called by TradingPipeline in Phase 4
     
     snapshot = health.get_health_snapshot()
     assert snapshot["status"] == "OK"
     
     watchdog.start_cycle()
     ts.advance(65)
-    await watchdog._monitor_loop().__anext__() if hasattr(watchdog._monitor_loop(), '__anext__') else None
     ts.advance(30)
     elapsed = ts.time() - watchdog.current_cycle_start
     if elapsed > 90:

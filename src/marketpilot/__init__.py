@@ -23,7 +23,8 @@ def main() -> None:
 
     logger.info("━" * 50)
     logger.info("  {} v{}", __app_name__, __version__)
-    logger.info("  Testnet: {}", settings.exchange.testnet)
-    logger.info("  DB: {}", settings.storage.url)
+    logger.info("  Market Data: {}", settings.exchange.environment.value)
+    logger.info("  Execution  : {}", settings.execution_mode.value)
+    logger.info("  DB         : {}", settings.storage.url)
     logger.info("━" * 50)
     logger.info("Foundation loaded — ready for module integration.")

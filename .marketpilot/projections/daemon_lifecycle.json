@@ -1,0 +1,11 @@
+{
+  "metadata": {},
+  "data": {
+    "daemon_instance_id": "847ae7e1-55e9-4317-a8cc-071bed7ac020",
+    "status": "COMPLETED",
+    "mode": "ONCE",
+    "started_at": 1786723971.5982926,
+    "heartbeat_at": 1786723975.5259018,
+    "completed_at": 1786723975.525902
+  }
+}

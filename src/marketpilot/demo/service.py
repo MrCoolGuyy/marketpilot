@@ -53,7 +53,7 @@ class DemoExecutionService:
             logger.warning("No actionable signal generated.")
             return None
             
-        client = BybitClient(self.settings.demo)
+        client = BybitClient(self.settings)
         
         try:
             await client.connect()
@@ -222,7 +222,7 @@ class DemoExecutionService:
             return None
             
         record = None
-        client = BybitClient(self.settings.demo)
+        client = BybitClient(self.settings)
         try:
             await client.connect()
             

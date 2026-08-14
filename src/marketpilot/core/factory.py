@@ -9,7 +9,7 @@ from typing import Any
 
 from loguru import logger
 
-from marketpilot.config.settings import AppSettings
+from marketpilot.config.settings import AppSettings, ExecutionMode
 from marketpilot.core.time_source import SystemClock
 from marketpilot.core.event_bus import EventBus
 from marketpilot.core.metrics_registry import MetricsRegistry
@@ -29,6 +29,7 @@ from marketpilot.engines.decision_audit_engine import DecisionAuditEngine
 from marketpilot.engines.execution_engine import ExecutionEngine
 from marketpilot.engines.reconciler_engine import ReconcilerEngine
 from marketpilot.engines.journal_engine import JournalEngine
+from marketpilot.engines.exposure_manager import ExposureManager
 
 from marketpilot.exchange.market_data_fetcher import MarketDataFetcher
 from marketpilot.scanner.snapshot_builder import InstrumentSnapshotBuilder
@@ -56,12 +57,15 @@ class RuntimeContext:
     execution: ExecutionEngine
     reconciler: ReconcilerEngine
     journal: JournalEngine
+    exposure: ExposureManager
     
     notifier: TelegramNotifier
     pipeline: TradingPipeline
     
     # Optional Validation Service (if Phase 11 implemented)
     validation: Any = None
+    
+    daemon_instance_id: Optional[str] = None
 
 
 class MissionControlFactory:
@@ -86,7 +90,23 @@ class MissionControlFactory:
         
     @classmethod
     def build_exchange(cls, settings: AppSettings) -> dict:
-        client = BybitClient(settings.exchange)
+        if settings.execution_mode == ExecutionMode.DEMO:
+            from marketpilot.config.settings import ExchangeSettings
+            from marketpilot.models.causal import MarketDataEnvironment
+            exchange_settings = ExchangeSettings(
+                api_key=settings.demo.api_key,
+                api_secret=settings.demo.api_secret,
+                environment=MarketDataEnvironment.TESTNET,
+                timeout_seconds=settings.exchange.timeout_seconds,
+                max_retries=settings.exchange.max_retries
+            )
+        else:
+            exchange_settings = settings.exchange
+            
+        client = BybitClient(
+            exchange_settings=exchange_settings, 
+            execution_mode=settings.execution_mode
+        )
         return {"client": client}
         
     @classmethod
@@ -105,6 +125,7 @@ class MissionControlFactory:
         execution = ExecutionEngine(exchange["client"], core["cb"])
         reconciler = ReconcilerEngine()
         journal = JournalEngine()
+        exposure = ExposureManager()
         
         builder = InstrumentSnapshotBuilder(indicator)
         
@@ -119,6 +140,7 @@ class MissionControlFactory:
             "execution": execution,
             "reconciler": reconciler,
             "journal": journal,
+            "exposure": exposure,
         }
         
     @classmethod
@@ -157,6 +179,7 @@ class MissionControlFactory:
             execution=engines["execution"],
             reconciler=engines["reconciler"],
             journal=engines["journal"],
+            exposure=engines["exposure"],
             notifier=notifier,
             pipeline=None  # type: ignore
         )
@@ -173,7 +196,7 @@ class MissionControlFactory:
     def _validate_dependencies(cls, ctx: RuntimeContext) -> None:
         """Ensures no engine is None before the runtime is returned."""
         for field_name in ctx.__slots__:
-            if field_name == "validation":
+            if field_name in ("validation", "daemon_instance_id"):
                 continue # Optional
             val = getattr(ctx, field_name)
             if val is None:

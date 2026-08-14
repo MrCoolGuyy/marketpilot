@@ -33,7 +33,7 @@ class AutopilotService:
             return None
             
         # 2. Get Equity
-        client = BybitClient(self.settings.demo)
+        client = BybitClient(self.settings)
         equity = Decimal("0")
         try:
             await client.connect()

@@ -85,10 +85,17 @@ class Interval(StrEnum):
     MN1 = "M"
 
 
-class EnvironmentProfile(StrEnum):
-    """Execution environment profile."""
+class MarketDataEnvironment(StrEnum):
+    """Source of market data."""
     
     MAINNET = "MAINNET"
     TESTNET = "TESTNET"
+
+
+class ExecutionMode(StrEnum):
+    """Level of execution authority."""
+    
+    PAPER = "PAPER"
     DEMO = "DEMO"
+    LIVE = "LIVE"
 

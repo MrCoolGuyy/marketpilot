@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from marketpilot.config.settings import ExchangeSettings
+from marketpilot.config.settings import ExchangeSettings, AppSettings, ExecutionMode
 from marketpilot.core.enums import AssetType, Interval
 from marketpilot.core.exceptions import ExchangeAPIError, ExchangeConnectionError
 from marketpilot.exchange.bybit_client import BybitClient
@@ -91,20 +91,26 @@ def mock_pybit() -> MagicMock:
                     "symbol": "BTCUSDT",
                     "baseCoin": "BTC",
                     "quoteCoin": "USDT",
+                    "contractType": "LinearPerpetual",
+                    "settleCoin": "USDT",
                     "status": "Trading",
                     "lotSizeFilter": {
                         "minOrderQty": "0.001",
                         "maxOrderQty": "100",
                         "qtyStep": "0.001",
+                        "postOnlyMaxOrderQty": "1000.0"
                     },
                     "priceFilter": {
-                        "tickSize": "0.10",
+                        "minPrice": "0.1",
+                        "maxPrice": "100000.0",
+                        "tickSize": "0.10"
                     },
                     "leverageFilter": {
                         "minLeverage": "1",
                         "maxLeverage": "100",
-                    },
-                },
+                        "leverageStep": "0.01"
+                    }
+                }
             ],
         },
     }
@@ -115,7 +121,7 @@ def mock_pybit() -> MagicMock:
 @pytest.fixture()
 def client(exchange_settings: ExchangeSettings, mock_pybit: MagicMock) -> BybitClient:
     """A BybitClient with an injected mock HTTP session."""
-    c = BybitClient(exchange_settings)
+    c = BybitClient(exchange_settings=exchange_settings, execution_mode=ExecutionMode.PAPER)
     c._http = mock_pybit  # inject mock
     return c
 
@@ -128,13 +134,13 @@ class TestConnect:
     """Tests for connect / disconnect lifecycle."""
 
     async def test_connect_success(self, exchange_settings: ExchangeSettings, mock_pybit: MagicMock) -> None:
-        client = BybitClient(exchange_settings)
+        client = BybitClient(exchange_settings=exchange_settings, execution_mode=ExecutionMode.PAPER)
         with patch("marketpilot.exchange.bybit_client.PybitHTTP", return_value=mock_pybit):
             await client.connect()
         assert client._http is mock_pybit
 
     async def test_connect_failure_raises(self, exchange_settings: ExchangeSettings) -> None:
-        client = BybitClient(exchange_settings)
+        client = BybitClient(exchange_settings=exchange_settings, execution_mode=ExecutionMode.PAPER)
         with patch("marketpilot.exchange.bybit_client.PybitHTTP", side_effect=Exception("network error")):
             with pytest.raises(ExchangeConnectionError, match="Failed to connect"):
                 await client.connect()
@@ -155,13 +161,13 @@ class TestPing:
         result = await client.ping()
 
         assert result["connected"] is True
-        assert result["environment"] == "testnet"
+        assert result["environment"] == "MAINNET"
         assert "server_time" in result
         assert "latency_ms" in result
         assert isinstance(result["latency_ms"], float)
 
     async def test_ping_not_connected_raises(self, exchange_settings: ExchangeSettings) -> None:
-        client = BybitClient(exchange_settings)
+        client = BybitClient(exchange_settings=exchange_settings, execution_mode=ExecutionMode.PAPER)
         with pytest.raises(ExchangeConnectionError, match="not connected"):
             await client.ping()
 
@@ -273,7 +279,7 @@ class TestGetInstruments:
                 "retMsg": "OK",
                 "result": {
                     "category": "linear",
-                    "list": [{"symbol": "BTCUSDT"}],
+                    "list": [{"symbol": "BTCUSDT", "contractType": "LinearPerpetual", "settleCoin": "USDT", "status": "Trading"}],
                     "nextPageCursor": "page2",
                 },
             },
@@ -282,7 +288,7 @@ class TestGetInstruments:
                 "retMsg": "OK",
                 "result": {
                     "category": "linear",
-                    "list": [{"symbol": "ETHUSDT"}],
+                    "list": [{"symbol": "ETHUSDT", "contractType": "LinearPerpetual", "settleCoin": "USDT", "status": "Trading"}],
                     "nextPageCursor": "",
                 },
             },

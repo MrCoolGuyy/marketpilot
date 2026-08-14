@@ -97,24 +97,28 @@ class MarketDataFetcher:
         top_tickers = [t[0] for t in valid_tickers[:limit]]
         
         # 4. Fetch klines for the top candidates concurrently
+        # Limit to 10 concurrent requests to prevent connection pool churn
+        sem = asyncio.Semaphore(10)
+        
         async def _fetch_full_data(ticker) -> RawMarketData | None:
-            try:
-                klines = await self._client.get_klines(
-                    symbol=ticker.symbol, 
-                    interval=interval, 
-                    limit=kline_limit, 
-                    asset_type=asset_type
-                )
-                return RawMarketData(
-                    symbol=ticker.symbol,
-                    asset_type=asset_type,
-                    ticker=ticker,
-                    klines=klines,
-                    timestamp=time.time()
-                )
-            except Exception as e:
-                logger.warning("Failed to fetch klines for {}: {}", ticker.symbol, e)
-                return None
+            async with sem:
+                try:
+                    klines = await self._client.get_klines(
+                        symbol=ticker.symbol, 
+                        interval=interval, 
+                        limit=kline_limit, 
+                        asset_type=asset_type
+                    )
+                    return RawMarketData(
+                        symbol=ticker.symbol,
+                        asset_type=asset_type,
+                        ticker=ticker,
+                        klines=klines,
+                        timestamp=time.time()
+                    )
+                except Exception as e:
+                    logger.warning("Failed to fetch klines for {}: {}", ticker.symbol, e)
+                    return None
                 
         tasks = [_fetch_full_data(t) for t in top_tickers]
         results = await asyncio.gather(*tasks)

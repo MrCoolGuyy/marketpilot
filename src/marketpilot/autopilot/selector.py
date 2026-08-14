@@ -25,7 +25,7 @@ class CandidateSelectorService:
     async def select_best_candidate(self, equity: Decimal) -> CandidateDecision | None:
         """Scan all eligible symbols and return the strongest candidate."""
         
-        client = BybitClient(self.settings.demo)
+        client = BybitClient(self.settings)
         # Verify connectivity and get tickers for turnover ranking
         try:
             await client.connect()
@@ -38,7 +38,7 @@ class CandidateSelectorService:
             await client.disconnect()
 
         # Step 1: Scan
-        scanner = ScannerService(BybitClient(self.settings.scanner), self.settings.scanner)
+        scanner = ScannerService(BybitClient(self.settings), self.settings.scanner)
         scan_results = await scanner.scan(Interval.H1)
         
         # Step 2 & 3: Evaluate Indicators & Strategy

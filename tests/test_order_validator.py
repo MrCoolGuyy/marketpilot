@@ -15,6 +15,7 @@ def test_order_validator_quantization() -> None:
     validator = OrderValidator()
     
     plan = TradePlan(
+        decision_id="DEC-123",
         symbol="BTCUSDT",
         direction=SignalDirection.LONG,
         entry=Decimal("100.12345"),
@@ -60,6 +61,7 @@ def test_order_validator_rejections() -> None:
     validator = OrderValidator()
     
     plan = TradePlan(
+        decision_id="DEC-123",
         symbol="BTCUSDT",
         direction=SignalDirection.LONG,
         entry=Decimal("100"),

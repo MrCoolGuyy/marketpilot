@@ -19,8 +19,8 @@ from typing import Any
 from loguru import logger
 from pybit.unified_trading import HTTP as PybitHTTP
 
-from marketpilot.config.settings import ExchangeSettings, DemoSettings
-from marketpilot.core.enums import EnvironmentProfile
+from marketpilot.config.settings import AppSettings, ExchangeSettings
+from marketpilot.core.enums import MarketDataEnvironment, ExecutionMode
 from marketpilot.core.constants import DEFAULT_RECV_WINDOW
 from marketpilot.core.enums import AssetType, Interval
 from marketpilot.core.exceptions import ExchangeAPIError, ExchangeConnectionError
@@ -35,7 +35,7 @@ class BybitClient:
 
     Usage::
 
-        client = BybitClient(settings.exchange)
+        client = BybitClient(settings)
         await client.connect()
 
         ticker = await client.get_tickers("BTCUSDT", AssetType.LINEAR)
@@ -49,14 +49,13 @@ class BybitClient:
         Exchange settings containing API credentials and tuning knobs.
     """
 
-    def __init__(self, settings: ExchangeSettings | DemoSettings) -> None:
-        self._settings = settings
+    def __init__(self, exchange_settings: ExchangeSettings, execution_mode: ExecutionMode) -> None:
+        self._execution_mode = execution_mode
+        self._demo_flag = (self._execution_mode == ExecutionMode.DEMO)
+        self._settings = exchange_settings
+        self._environment = exchange_settings.environment
+            
         self._http: PybitHTTP | None = None
-        self._is_demo = isinstance(settings, DemoSettings)
-        if self._is_demo:
-            self._profile = settings.profile
-        else:
-            self._profile = EnvironmentProfile.TESTNET if settings.testnet else EnvironmentProfile.MAINNET
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -71,11 +70,11 @@ class BybitClient:
             api_key = self._settings.api_key.get_secret_value() or None
             api_secret = self._settings.api_secret.get_secret_value() or None
 
-            is_testnet = getattr(self._settings, "testnet", False)
+            is_testnet = (self._environment == MarketDataEnvironment.TESTNET)
             
             self._http = PybitHTTP(
                 testnet=is_testnet,
-                demo=self._is_demo,
+                demo=self._demo_flag,
                 api_key=api_key,
                 api_secret=api_secret,
                 recv_window=DEFAULT_RECV_WINDOW,
@@ -88,7 +87,7 @@ class BybitClient:
 
             # Validate connectivity
             result = await self._call(self._http.get_server_time)
-            env_str = self._profile.value
+            env_str = self._environment.value
             logger.info(
                 "Connected to Bybit {} (server_time={})",
                 env_str,
@@ -116,8 +115,10 @@ class BybitClient:
         Returns a dict with ``connected``, ``server_time``,
         ``latency_ms``, and ``environment``.
         """
+        if not self._http:
+            raise ExchangeConnectionError("Client is not connected")
         start = time.perf_counter()
-        result = await self._call(self._http_session.get_server_time)
+        result = await self._call(self._http.get_server_time)
         latency_ms = (time.perf_counter() - start) * 1_000
 
         time_nano = result.get("result", {}).get("timeNano", "0")
@@ -128,14 +129,14 @@ class BybitClient:
             "server_time": time_second,
             "server_time_nano": time_nano,
             "latency_ms": round(latency_ms, 2),
-            "environment": "testnet" if self._settings.testnet else "mainnet",
+            "environment": self._environment.value,
         }
 
     @log_execution
     @retry(max_retries=3, exceptions=(ExchangeAPIError, OSError))
     async def get_server_time(self) -> datetime:
         """Fetch the exchange server time as a UTC ``datetime``."""
-        result = await self._call(self._http_session.get_server_time)
+        result = await self._call(self._http.get_server_time)
         time_nano = int(result["result"]["timeNano"])
         # timeNano is in nanoseconds → convert to seconds
         return datetime.fromtimestamp(time_nano / 1_000_000_000, tz=UTC)
@@ -164,7 +165,8 @@ class BybitClient:
         raw_list = result.get("result", {}).get("list", [])
 
         tickers: list[Ticker] = []
-        now = datetime.now(tz=UTC)
+        time_server = int(result.get("time", time.time() * 1000))
+        now = ms_to_datetime(time_server)
 
         for item in raw_list:
             tickers.append(
@@ -253,6 +255,15 @@ class BybitClient:
             raw_list = data.get("list", [])
             
             for item in raw_list:
+                # strictly enforce MarketPilot v1 universe
+                if asset_type == AssetType.LINEAR:
+                    if item.get("contractType") != "LinearPerpetual":
+                        continue
+                    if item.get("settleCoin") != "USDT":
+                        continue
+                    if item.get("status") != "Trading":
+                        continue
+                        
                 lot_filter = item.get("lotSizeFilter", {})
                 price_filter = item.get("priceFilter", {})
                 leverage_filter = item.get("leverageFilter", {})
@@ -342,14 +353,14 @@ class BybitClient:
         
         Raises RuntimeError immediately if attempting to execute on MAINNET.
         """
-        if not self._is_demo or self._profile != EnvironmentProfile.DEMO:
+        if self._execution_mode != ExecutionMode.DEMO:
             logger.error("ATTEMPTED TO PLACE ORDER ON NON-DEMO PROFILE. ABORTING.")
             raise RuntimeError("CRITICAL: Mainnet/Testnet execution is strictly disabled. Use Demo only.")
 
         if not self._http:
             raise ExchangeConnectionError("Client is not connected")
 
-        logger.info(f"[{self._profile.value}] Placing {side} {order_type} order for {qty} {symbol}")
+        logger.info(f"[{self._execution_mode.value}] Placing {side} {order_type} order for {qty} {symbol}")
         
         kwargs = {
             "category": category,
@@ -416,3 +427,57 @@ class BybitClient:
             kwargs["symbol"] = symbol
             
         return await self._call(self._http.get_positions, **kwargs)
+
+    @log_execution
+    @retry(max_retries=3, exceptions=(ExchangeAPIError, OSError))
+    async def get_active_orders(self, category: str = "linear", settle_coin: str = "USDT") -> list[dict]:
+        """Fetch all active regular and conditional orders."""
+        if not self._http:
+            raise ExchangeConnectionError("Client is not connected")
+            
+        orders = {}
+        cursor = ""
+        while True:
+            params = {"category": category, "settleCoin": settle_coin}
+            if cursor:
+                params["cursor"] = cursor
+                
+            res = await self._call(self._http.get_open_orders, **params)
+            data = res.get("result", {})
+            for o in data.get("list", []):
+                oid = o.get("orderId")
+                if oid:
+                    orders[oid] = o
+            
+            cursor = data.get("nextPageCursor")
+            if not cursor:
+                break
+        return list(orders.values())
+
+    @log_execution
+    @retry(max_retries=3, exceptions=(ExchangeAPIError, OSError))
+    async def get_order_history(self, category: str = "linear", settle_coin: str = "USDT", limit: int = 50, cursor: str = "") -> dict[str, Any]:
+        """Fetch a page of recent order history."""
+        if not self._http:
+            raise ExchangeConnectionError("Client is not connected")
+            
+        params = {"category": category, "settleCoin": settle_coin, "limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+            
+        res = await self._call(self._http.get_order_history, **params)
+        return res.get("result", {})
+        
+    @log_execution
+    @retry(max_retries=3, exceptions=(ExchangeAPIError, OSError))
+    async def get_execution_history(self, category: str = "linear", settle_coin: str = "USDT", limit: int = 50, cursor: str = "") -> dict[str, Any]:
+        """Fetch a page of recent execution/fill history."""
+        if not self._http:
+            raise ExchangeConnectionError("Client is not connected")
+            
+        params = {"category": category, "settleCoin": settle_coin, "limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+            
+        res = await self._call(self._http.get_executions, **params)
+        return res.get("result", {})

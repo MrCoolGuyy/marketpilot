@@ -14,7 +14,7 @@ from pathlib import Path
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from marketpilot.core.enums import EnvironmentProfile
+from marketpilot.core.enums import MarketDataEnvironment, ExecutionMode
 from marketpilot.core.constants import (
     DB_MAX_OVERFLOW,
     DB_POOL_RECYCLE,
@@ -39,7 +39,7 @@ class ExchangeSettings(BaseSettings):
 
     api_key: SecretStr = Field(default=SecretStr(""), description="Bybit API key")
     api_secret: SecretStr = Field(default=SecretStr(""), description="Bybit API secret")
-    testnet: bool = Field(default=True, description="Use testnet endpoints")
+    environment: MarketDataEnvironment = Field(default=MarketDataEnvironment.MAINNET, description="Market data source environment")
     rate_limit: int = Field(default=DEFAULT_RATE_LIMIT, ge=1)
     order_rate_limit: int = Field(default=ORDER_RATE_LIMIT, ge=1)
     timeout: int = Field(default=DEFAULT_TIMEOUT_SECONDS, ge=1)
@@ -290,7 +290,6 @@ class DemoSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="DEMO_", env_file=".env", extra="ignore")
 
-    profile: EnvironmentProfile = Field(default=EnvironmentProfile.DEMO, description="Execution profile. Default DEMO.")
     api_key: SecretStr = Field(default=SecretStr(""), description="Bybit Demo Trading API key")
     api_secret: SecretStr = Field(default=SecretStr(""), description="Bybit Demo Trading API secret")
     execution_enabled: bool = Field(default=False, description="Master switch for Demo execution")
@@ -317,6 +316,7 @@ class AppSettings(BaseSettings):
 
     app_name: str = "MarketPilot"
     debug: bool = Field(default=False, description="Enable debug mode")
+    execution_mode: ExecutionMode = Field(default=ExecutionMode.PAPER, description="Global Execution Mode (PAPER, DEMO, LIVE)")
 
     exchange: ExchangeSettings = Field(default_factory=ExchangeSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)

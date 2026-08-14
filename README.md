@@ -57,9 +57,17 @@ Periksa konektivitas ke API publik Bybit:
 uv run marketpilot ping
 ```
 
-Tampilkan dashboard web di browser Anda:
+Untuk alur kerja harian yang disarankan (menggunakan 2 terminal):
+
+**Terminal 1 (Memantau Dasbor UI):**
 ```bash
 uv run marketpilot dashboard
+```
+Lalu buka `http://127.0.0.1:8000` di browser Anda.
+
+**Terminal 2 (Menjalankan Mesin Evaluasi):**
+```bash
+uv run marketpilot daemon
 ```
 
 Untuk detail perintah selengkapnya dan cara penggunaan harian, silakan baca [Manual Penggunaan Lengkap](docs/MANUAL_PENGGUNAAN.md).

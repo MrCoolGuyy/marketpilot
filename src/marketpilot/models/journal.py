@@ -13,7 +13,7 @@ from marketpilot.models.reconciliation import ReconciliationReport
 from marketpilot.models.portfolio import PortfolioSnapshot
 from marketpilot.models.position import PositionEvent
 from marketpilot.models.submission import PreparedSubmission, NetworkPermit, OrderEventKey
-from marketpilot.models.evidence import FinalCandidate
+from marketpilot.models.causal import FinalCandidate
 
 class EventJournalEntry(BaseModel, frozen=True):
     """A log of a single lifecycle event for a position."""

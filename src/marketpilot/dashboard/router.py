@@ -30,14 +30,61 @@ def _get_cached(key: str) -> dict | None:
 def _set_cached(key: str, data: dict) -> None:
     _CACHE[key] = (data, time.time())
 
-@router.get("/health")
-async def get_health(request: Request):
-    """Health check endpoint."""
-    # Ensure database is reachable
-    db_ok = await request.app.state.db.health_check()
-    if not db_ok:
-        raise HTTPException(status_code=503, detail="Database unhealthy")
-    return {"status": "ok"}
+@router.get("/system/status")
+async def get_system_status(request: Request):
+    """Mission Control Phase 3 System Status."""
+    app_state = request.app.state
+    daemon = getattr(app_state, "daemon", None)
+    settings = getattr(app_state, "settings", None)
+    recovery_result = getattr(app_state, "recovery_result", None)
+    
+    env = settings.exchange.environment.value if settings and hasattr(settings, "exchange") else "UNKNOWN"
+    exec_mode = settings.execution_mode.value if settings and hasattr(settings, "execution_mode") else "UNKNOWN"
+    
+    status = {
+        "daemon_state": "RUNNING" if daemon else "NOT_STARTED",
+        "market_data_environment": env,
+        "execution_mode": exec_mode,
+        "journal_status": "DURABLE" if daemon and daemon.journal else "UNAVAILABLE",
+        "state_authority": {
+            "position_manager": "AUTHORITATIVE",
+            "exposure_manager": "SHADOW"
+        },
+        "safety_checks": {
+            "writer_scope": "LOCAL_HOST",
+            "local_writer_verified": True if daemon and getattr(daemon, "_lock_file", None) else False,
+            "position_mode_verification_scope": {
+                "verified": daemon.verifier.get_verified_symbols() if daemon and hasattr(daemon, "verifier") else [],
+                "incompatible": daemon.verifier.get_incompatible_symbols() if daemon and hasattr(daemon, "verifier") else [],
+                "unverified": daemon.verifier.get_unverified_symbols() if daemon and hasattr(daemon, "verifier") else []
+            }
+        }
+    }
+    
+    if recovery_result:
+        matched_records = [r for r in recovery_result.reconciled_records if r.issue_type == "MATCHED"]
+        matched_counts = len(matched_records)
+        
+        # Optionally group reasons if we want
+        reasons = [r.resolution_reason for r in matched_records if r.resolution_reason]
+        
+        orphans = len([r for r in recovery_result.reconciled_records if r.issue_type == "EXCHANGE_ORPHAN"])
+        ghosts = len([r for r in recovery_result.reconciled_records if r.issue_type == "JOURNAL_GHOST"])
+        mismatches = len([r for r in recovery_result.reconciled_records if r.issue_type == "STATE_MISMATCH"])
+        
+        status["recovery"] = {
+            "is_safe": recovery_result.success,
+            "matched_records": matched_counts,
+            "matched_reasons_sample": reasons[:5] if reasons else [],
+            "orphan_records": orphans,
+            "ghost_records": ghosts,
+            "mismatch_records": mismatches,
+            "fatal_error": recovery_result.fatal_error
+        }
+    else:
+         status["recovery"] = None
+         
+    return {"status": "ok", "system": status}
 
 @router.get("/settings")
 async def get_settings(request: Request):
@@ -246,8 +293,91 @@ async def get_research_latest():
 
 
 # ---------------------------------------------------------------------------
-# Control Center POST Endpoints
+# Phase 4 Dashboard Projections
 # ---------------------------------------------------------------------------
+
+def _evaluate_projection_liveness(lifecycle: dict | None, cadence: int = 60) -> tuple[bool, str]:
+    """Return (is_stale, liveness_status)."""
+    if not lifecycle:
+        return True, "UNKNOWN"
+    
+    import time
+    daemon_status = lifecycle.get("status", "UNKNOWN")
+    
+    # If the daemon explicitly stopped (e.g. after --once), the projection is not 'stale', it is 'COMPLETED/OFFLINE'.
+    if daemon_status == "COMPLETED":
+        return False, "COMPLETED"
+        
+    heartbeat_at = lifecycle.get("heartbeat_at", 0)
+    
+    # Tolerance factor is 2x cadence to allow for network/API delays
+    if time.time() - heartbeat_at > (cadence * 2):
+        return True, "OFFLINE"
+        
+    return False, "RUNNING"
+
+@router.get("/dashboard/cycle-status")
+async def get_dashboard_cycle_status(request: Request):
+    """Phase 4 Read-Only Cycle Status Projection."""
+    store = getattr(request.app.state, "dashboard_read_store", None)
+    if not store:
+        raise HTTPException(status_code=503, detail="Dashboard Read Store unavailable")
+        
+    meta = store.get_projection_metadata()
+        
+    # Read lifecycle
+    lifecycle = store.get_lifecycle()
+    cadence = meta.get("evaluation_cadence_seconds", 60) if meta else 60
+    is_stale, liveness = _evaluate_projection_liveness(lifecycle, cadence)
+    
+    return {
+        "status": "ok",
+        "is_stale": is_stale,
+        "liveness": liveness,
+        "metadata": meta,
+        "lifecycle": lifecycle
+    }
+
+@router.get("/dashboard/market-intelligence")
+async def get_dashboard_market_intelligence(request: Request, symbol: str):
+    """Phase 4 Read-Only Market Intelligence Projection."""
+    store = getattr(request.app.state, "dashboard_read_store", None)
+    if not store:
+        raise HTTPException(status_code=503, detail="Dashboard Read Store unavailable")
+        
+    meta = store.get_projection_metadata()
+    lifecycle = store.get_lifecycle()
+    cadence = meta.get("evaluation_cadence_seconds", 60) if meta else 60
+    is_stale, _ = _evaluate_projection_liveness(lifecycle, cadence)
+
+    data = store.get_market_intelligence(symbol)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"No market intelligence for {symbol}")
+        
+    return {"status": "ok", "is_stale": is_stale, "data": data.model_dump(mode="json")}
+
+
+@router.get("/dashboard/strategy-evidence")
+async def get_dashboard_strategy_evidence(request: Request, decision_key: str = None):
+    """Phase 4 Read-Only Strategy/Evidence Traceability Projection."""
+    store = getattr(request.app.state, "dashboard_read_store", None)
+    if not store:
+        raise HTTPException(status_code=503, detail="Dashboard Read Store unavailable")
+        
+    meta = store.get_projection_metadata()
+    lifecycle = store.get_lifecycle()
+    cadence = meta.get("evaluation_cadence_seconds", 60) if meta else 60
+    is_stale, _ = _evaluate_projection_liveness(lifecycle, cadence)
+
+    if decision_key:
+        data = store.get_evidence_traceability(decision_key)
+        if not data:
+            raise HTTPException(status_code=404, detail=f"No evidence traceability for key {decision_key}")
+        return {"status": "ok", "is_stale": is_stale, "data": data.model_dump(mode="json")}
+    else:
+        # Return all
+        data = store.get_all_evidence()
+        return {"status": "ok", "is_stale": is_stale, "data": [d.model_dump(mode="json") for d in data]}
 
 async def verify_control_key(request: Request, x_marketpilot_control_key: str = Header(None)) -> AppSettings:
     """Dependency to verify the request comes from localhost with the correct secret key."""

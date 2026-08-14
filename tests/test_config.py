@@ -18,6 +18,7 @@ from marketpilot.config.loader import (
     reset_settings,
 )
 from marketpilot.config.settings import AppSettings, ExchangeSettings
+from marketpilot.core.enums import MarketDataEnvironment, ExecutionMode
 from marketpilot.core.exceptions import ConfigFileNotFoundError
 
 
@@ -76,16 +77,17 @@ class TestAppSettings:
         # Pydantic v2 SettingsConfigDict is stored in model_config
         # We can also just instantiate the settings with _env_file=None directly to test defaults
         e = ExchangeSettings(_env_file=None)
-        assert e.testnet is True
+        assert e.environment == MarketDataEnvironment.MAINNET
         
         settings = AppSettings(_env_file=None, exchange=e)
         assert settings.app_name == "MarketPilot"
         assert settings.debug is False
-        assert settings.exchange.testnet is True
+        assert settings.exchange.environment == MarketDataEnvironment.MAINNET
+        assert settings.execution_mode == ExecutionMode.PAPER
 
     def test_exchange_settings(self) -> None:
-        exchange = ExchangeSettings(testnet=False, rate_limit=20)
-        assert exchange.testnet is False
+        exchange = ExchangeSettings(environment=MarketDataEnvironment.TESTNET, rate_limit=20)
+        assert exchange.environment == MarketDataEnvironment.TESTNET
         assert exchange.rate_limit == 20
 
 

@@ -37,3 +37,9 @@ def test_settings() -> Generator[AppSettings]:
 def sample_datetime() -> datetime:
     """A fixed UTC datetime for reproducible tests."""
     return datetime(2025, 1, 15, 12, 0, 0, tzinfo=UTC)
+
+@pytest.fixture(autouse=True)
+def isolate_projections(tmp_path, monkeypatch):
+    """Ensure no test pollutes the production ~/.marketpilot/projections directory."""
+    projections_dir = tmp_path / "projections"
+    monkeypatch.setattr("marketpilot.dashboard.projections.DEFAULT_PROJECTIONS_DIR", projections_dir)

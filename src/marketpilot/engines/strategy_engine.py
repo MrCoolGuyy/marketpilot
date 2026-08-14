@@ -1,4 +1,4 @@
-﻿"""
+"""
 MarketPilot Engines � Strategy Engine.
 
 Evaluates signals using a library of strategies and ranks them
@@ -13,11 +13,11 @@ from decimal import Decimal
 from typing import Optional
 
 from marketpilot.config.settings import StrategySettings
-from marketpilot.models.strategy import SignalDirection, StrategyEvaluation, StrategyResult
-from marketpilot.models.scanner import InstrumentSnapshot
+from marketpilot.models.causal import ClosedInstrumentSnapshot, SignalIntent, SignalDirection, StrategyIdentity
 from marketpilot.models.indicators import IndicatorSeries
 from marketpilot.models.regime import MarketRegime
 from marketpilot.models.core import EngineMetadata
+import uuid
 
 class BaseStrategy(ABC):
     """Abstract base class for all trading strategies."""
@@ -27,169 +27,125 @@ class BaseStrategy(ABC):
         self, 
         series: IndicatorSeries, 
         regime: MarketRegime, 
-        snapshot: InstrumentSnapshot,
+        snapshot: ClosedInstrumentSnapshot,
         settings: StrategySettings
-    ) -> StrategyResult:
-        """Evaluate the market data and explicitly return a StrategyResult."""
+    ) -> SignalIntent | None:
+        """Evaluate the market data and explicitly return a SignalIntent or None if HOLD/invalid."""
         pass
 
 
 class EmaPullbackStrategy(BaseStrategy):
     """Buys in an uptrend when price pulls back to the fast EMA."""
     
-    def evaluate(self, series: IndicatorSeries, regime: MarketRegime, snapshot: InstrumentSnapshot, settings: StrategySettings) -> StrategyResult:
+    def evaluate(self, series: IndicatorSeries, regime: MarketRegime, snapshot: ClosedInstrumentSnapshot, settings: StrategySettings) -> SignalIntent | None:
         point = series.latest
         if not point or point.ema_fast is None or point.ema_slow is None or point.atr is None or point.rsi is None:
-            return StrategyResult(
-                strategy_name="EMA Pullback",
-                signal=SignalDirection.HOLD,
-                reason_code="MISSING_INDICATORS"
-            )
+            return None
 
         signal = SignalDirection.HOLD
-        confidence = Decimal("0")
-        reason_code = "NO_PULLBACK_DETECTED"
         
+        last_price = snapshot.facts.close
+
         # Long Logic
         if regime in (MarketRegime.WEAK_BULL, MarketRegime.TRENDING_BULL) and point.ema_fast > point.ema_slow:
-            # Price pulls back close to fast EMA
-            dist_to_ema = (snapshot.last_price - point.ema_fast).copy_abs()
+            dist_to_ema = (last_price - point.ema_fast).copy_abs()
             if dist_to_ema < point.atr:
                 signal = SignalDirection.LONG
-                reason_code = "BULL_EMA_TOUCH"
-                rsi_score = max(Decimal("0"), Decimal("100") - (point.rsi - Decimal("45")).copy_abs() * Decimal("5"))
-                confidence = Decimal("30") + (rsi_score * Decimal("0.2")) + Decimal("30")
                 
         # Short Logic
         elif regime in (MarketRegime.WEAK_BEAR, MarketRegime.TRENDING_BEAR) and point.ema_fast < point.ema_slow:
-            dist_to_ema = (snapshot.last_price - point.ema_fast).copy_abs()
+            dist_to_ema = (last_price - point.ema_fast).copy_abs()
             if dist_to_ema < point.atr:
                 signal = SignalDirection.SHORT
-                reason_code = "BEAR_EMA_TOUCH"
-                rsi_score = max(Decimal("0"), Decimal("100") - (point.rsi - Decimal("55")).copy_abs() * Decimal("5"))
-                confidence = Decimal("30") + (rsi_score * Decimal("0.2")) + Decimal("30")
-
-        metrics = {
-            "RSI": f"{point.rsi:.2f}",
-            "ATR": f"{point.atr:.2f}",
-            "FastEMA": f"{point.ema_fast:.2f}"
-        }
 
         if signal == SignalDirection.HOLD:
-            if regime not in (MarketRegime.WEAK_BULL, MarketRegime.TRENDING_BULL, MarketRegime.WEAK_BEAR, MarketRegime.TRENDING_BEAR):
-                reason_code = "REGIME_RANGING"
+            return None
 
-            return StrategyResult(
-                strategy_name="EMA Pullback",
-                signal=signal,
-                reason_code=reason_code,
-                metrics=metrics
-            )
-
-        # Risk parameters
-        entry = snapshot.last_price
+        # Risk parameters based ONLY on closed facts (no entry price assumed for execution)
+        # Using the last closed price as the reference point for logical bands.
         sl_dist = point.atr * Decimal("1.5")
         
         if signal == SignalDirection.LONG:
-            sl = entry - sl_dist
-            tp = entry + (sl_dist * Decimal("3.0"))
+            sl = last_price - sl_dist
+            tp = last_price + (sl_dist * Decimal("3.0"))
         else:
-            sl = entry + sl_dist
-            tp = entry - (sl_dist * Decimal("3.0"))
+            sl = last_price + sl_dist
+            tp = last_price - (sl_dist * Decimal("3.0"))
 
-        # Calculate RR
-        risk = (entry - sl).copy_abs()
-        reward = (tp - entry).copy_abs()
-        expected_rr = reward / risk if risk > Decimal("0") else Decimal("0")
-        
-        confidence = min(Decimal("100"), max(Decimal("0"), confidence))
-
-        candidate = StrategyEvaluation(
-            expected_win_rate=Decimal("55.00"),
-            entry_price=entry.quantize(Decimal("0.0001")),
-            stop_loss=sl.quantize(Decimal("0.0001")),
-            take_profit=tp.quantize(Decimal("0.0001")),
-            expected_rr=expected_rr.quantize(Decimal("0.01"))
+        identity = StrategyIdentity(
+            registry_version="1.0",
+            strategy_id="ema_pullback",
+            strategy_version="1.0",
+            parameter_set_id="default"
         )
 
-        return StrategyResult(
-            strategy_name="EMA Pullback",
-            signal=signal,
-            confidence=confidence.quantize(Decimal("0.01")),
-            reason_code=reason_code,
-            metrics=metrics,
-            candidate_trade=candidate
+        return SignalIntent(
+            intent_id=str(uuid.uuid4()),
+            identity=identity,
+            direction=signal,
+            symbol=snapshot.symbol,
+            signal_timestamp=snapshot.creation_timestamp,
+            logical_stop_loss=sl,
+            logical_take_profit=tp,
+            provenance_snapshot_id=snapshot.snapshot_id
         )
 
 
 class MomentumStrategy(BaseStrategy):
     """Trades high momentum breakouts."""
-    def evaluate(self, series: IndicatorSeries, regime: MarketRegime, snapshot: InstrumentSnapshot, settings: StrategySettings) -> StrategyResult:
+    def evaluate(self, series: IndicatorSeries, regime: MarketRegime, snapshot: ClosedInstrumentSnapshot, settings: StrategySettings) -> SignalIntent | None:
         point = series.latest
         if not point or point.rsi is None or point.atr is None:
-            return StrategyResult(strategy_name="Momentum", signal=SignalDirection.HOLD, reason_code="MISSING_INDICATORS")
+            return None
             
         signal = SignalDirection.HOLD
-        confidence = Decimal("0")
-        reason_code = "WEAK_MOMENTUM"
         
-        if point.rsi > Decimal("65") and snapshot.momentum_24h > Decimal("0.05"):
+        if point.rsi > Decimal("65") and snapshot.facts.momentum_24h > Decimal("0.05"):
             signal = SignalDirection.LONG
-            reason_code = "STRONG_BULL_MOMENTUM"
-            confidence = Decimal("75")
-        elif point.rsi < Decimal("35") and snapshot.momentum_24h < Decimal("-0.05"):
+        elif point.rsi < Decimal("35") and snapshot.facts.momentum_24h < Decimal("-0.05"):
             signal = SignalDirection.SHORT
-            reason_code = "STRONG_BEAR_MOMENTUM"
-            confidence = Decimal("75")
             
-        metrics = {
-            "RSI": f"{point.rsi:.2f}",
-            "Momentum_24h": f"{snapshot.momentum_24h:.4f}"
-        }
-
         if signal == SignalDirection.HOLD:
-            return StrategyResult(strategy_name="Momentum", signal=signal, reason_code=reason_code, metrics=metrics)
+            return None
             
-        entry = snapshot.last_price
+        last_price = snapshot.facts.close
         sl_dist = point.atr * Decimal("2")
         if signal == SignalDirection.LONG:
-            sl = entry - sl_dist
-            tp = entry + (sl_dist * Decimal("2.1"))
+            sl = last_price - sl_dist
+            tp = last_price + (sl_dist * Decimal("2.1"))
         else:
-            sl = entry + sl_dist
-            tp = entry - (sl_dist * Decimal("2.1"))
+            sl = last_price + sl_dist
+            tp = last_price - (sl_dist * Decimal("2.1"))
             
-        risk = (entry - sl).copy_abs()
-        expected_rr = (tp - entry).copy_abs() / risk if risk > Decimal("0") else Decimal("0")
-        
-        candidate = StrategyEvaluation(
-            expected_win_rate=Decimal("45.00"),
-            entry_price=entry.quantize(Decimal("0.0001")),
-            stop_loss=sl.quantize(Decimal("0.0001")),
-            take_profit=tp.quantize(Decimal("0.0001")),
-            expected_rr=expected_rr.quantize(Decimal("0.01"))
+        identity = StrategyIdentity(
+            registry_version="1.0",
+            strategy_id="momentum",
+            strategy_version="1.0",
+            parameter_set_id="default"
         )
-        
-        return StrategyResult(
-            strategy_name="Momentum",
-            signal=signal,
-            confidence=confidence.quantize(Decimal("0.01")),
-            reason_code=reason_code,
-            metrics=metrics,
-            candidate_trade=candidate
+
+        return SignalIntent(
+            intent_id=str(uuid.uuid4()),
+            identity=identity,
+            direction=signal,
+            symbol=snapshot.symbol,
+            signal_timestamp=snapshot.creation_timestamp,
+            logical_stop_loss=sl,
+            logical_take_profit=tp,
+            provenance_snapshot_id=snapshot.snapshot_id
         )
 
 
 class BreakoutStrategy(BaseStrategy):
     """Simple placeholder for breakout strategy."""
-    def evaluate(self, series: IndicatorSeries, regime: MarketRegime, snapshot: InstrumentSnapshot, settings: StrategySettings) -> StrategyResult:
-        return StrategyResult(strategy_name="Breakout", signal=SignalDirection.HOLD, reason_code="NO_BREAKOUT_DETECTED")
+    def evaluate(self, series: IndicatorSeries, regime: MarketRegime, snapshot: ClosedInstrumentSnapshot, settings: StrategySettings) -> SignalIntent | None:
+        return None
 
 
 class TrendFollowingStrategy(BaseStrategy):
     """Simple placeholder for trend following strategy."""
-    def evaluate(self, series: IndicatorSeries, regime: MarketRegime, snapshot: InstrumentSnapshot, settings: StrategySettings) -> StrategyResult:
-        return StrategyResult(strategy_name="Trend Following", signal=SignalDirection.HOLD, reason_code="TREND_EXHAUSTED")
+    def evaluate(self, series: IndicatorSeries, regime: MarketRegime, snapshot: ClosedInstrumentSnapshot, settings: StrategySettings) -> SignalIntent | None:
+        return None
 
 
 class StrategyEngine:
@@ -204,93 +160,25 @@ class StrategyEngine:
             TrendFollowingStrategy()
         ]
 
-    def _calculate_regime_match(self, result: StrategyResult, regime: MarketRegime) -> Decimal:
-        """Scores how well the signal matches the current regime (0-100)."""
-        if result.signal == SignalDirection.LONG:
-            if regime in (MarketRegime.TRENDING_BULL, MarketRegime.WEAK_BULL):
-                return Decimal("100")
-            elif regime == MarketRegime.RANGING:
-                return Decimal("50")
-            else:
-                return Decimal("0")
-        elif result.signal == SignalDirection.SHORT:
-            if regime in (MarketRegime.TRENDING_BEAR, MarketRegime.WEAK_BEAR):
-                return Decimal("100")
-            elif regime == MarketRegime.RANGING:
-                return Decimal("50")
-            else:
-                return Decimal("0")
-        return Decimal("0")
-
-    def _normalize_rr(self, rr: Decimal) -> Decimal:
-        """Normalizes RR to 0-100 score. E.g. RR 2.0 = 50, RR 4.0 = 100."""
-        capped_rr = min(Decimal("4.0"), rr)
-        score = (capped_rr / Decimal("4.0")) * Decimal("100")
-        return score
-
     def evaluate(
         self, 
         series: IndicatorSeries, 
         regime: MarketRegime, 
-        snapshot: InstrumentSnapshot,
+        snapshot: ClosedInstrumentSnapshot,
         decision_id: str
-    ) -> tuple[list[StrategyResult], Optional[StrategyResult], EngineMetadata]:
-        """Evaluates all strategies and returns all results + the best one + metadata."""
+    ) -> tuple[list[SignalIntent], EngineMetadata]:
+        """Evaluates all strategies and returns all actionable intents + metadata."""
         start_time = time.time()
         
-        all_results: list[StrategyResult] = []
-        best_result: Optional[StrategyResult] = None
-        best_score = Decimal("-1")
-        
-        w_conf = Decimal(str(self._settings.weight_confidence))
-        w_mq = Decimal(str(self._settings.weight_market_quality))
-        w_reg = Decimal(str(self._settings.weight_regime_match))
-        w_rr = Decimal(str(self._settings.weight_expected_rr))
+        all_intents: list[SignalIntent] = []
 
         for strategy in self._strategies:
-            res = strategy.evaluate(series, regime, snapshot, self._settings)
-            all_results.append(res)
-            
-            if not res.is_actionable or not res.candidate_trade:
-                continue
-                
-            # Must meet minimum RR
-            if res.candidate_trade.expected_rr < Decimal(str(self._settings.minimum_rr)):
-                # Overwrite reason if RR fails
-                # Since frozen=True, we can't edit it. So we recreate it.
-                res = StrategyResult(
-                    **res.model_dump(exclude={"reason_code"}),
-                    reason_code="REJECTED_LOW_RR"
-                )
-                # Note: modifying the list so the rejected one is returned
-                all_results[-1] = res
-                continue
-
-            # Calculate components
-            conf_score = res.confidence
-            mq_score = snapshot.market_quality or Decimal("0")
-            regime_score = self._calculate_regime_match(res, regime)
-            rr_score = self._normalize_rr(res.candidate_trade.expected_rr)
-
-            overall_score = (
-                (conf_score * w_conf) +
-                (mq_score * w_mq) +
-                (regime_score * w_reg) +
-                (rr_score * w_rr)
-            )
-            
-            if overall_score > best_score:
-                best_score = overall_score
-                # Insert overall score into metrics for the best result?
-                metrics = res.metrics.copy()
-                metrics["overall_score"] = f"{overall_score:.2f}"
-                best_result = StrategyResult(
-                    **res.model_dump(exclude={"metrics"}),
-                    metrics=metrics
-                )
+            intent = strategy.evaluate(series, regime, snapshot, self._settings)
+            if intent:
+                all_intents.append(intent)
                 
         processing_time_ms = (time.time() - start_time) * 1000
         metadata = EngineMetadata(processing_time_ms=processing_time_ms, decision_id=decision_id)
         
-        return all_results, best_result, metadata
+        return all_intents, metadata
 

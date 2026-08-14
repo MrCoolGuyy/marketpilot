@@ -19,6 +19,7 @@ class PipelineContext(BaseModel, frozen=True):
     config_hash: str
     market_time: datetime
     start_time: float
+    daemon_instance_id: str = "unknown"
     engine_metadata: dict[str, Any] = Field(default_factory=dict)
 
 class CycleSnapshot(BaseModel, frozen=True):

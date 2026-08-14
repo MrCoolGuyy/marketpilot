@@ -15,6 +15,7 @@ class ReconciliationRecord(BaseModel):
     decision_id: Optional[str] = None
     issue_type: str
     resolution_action: str
+    resolution_reason: Optional[str] = None
 
 class ExchangeRecoverySnapshot(BaseModel):
     """An immutable snapshot of the exchange state used during recovery."""
