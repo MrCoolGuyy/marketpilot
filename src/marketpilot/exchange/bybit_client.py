@@ -1,5 +1,5 @@
 """
-MarketPilot Exchange — Bybit V5 Unified Trading API client.
+MarketPilot Exchange â€” Bybit V5 Unified Trading API client.
 
 Wraps the synchronous ``pybit.unified_trading.HTTP`` class in an async
 interface.  All blocking I/O is offloaded to a thread-pool via
@@ -54,7 +54,7 @@ class BybitClient:
         self._demo_flag = (self._execution_mode == ExecutionMode.DEMO)
         self._settings = exchange_settings
         self._environment = exchange_settings.environment
-            
+
         self._http: PybitHTTP | None = None
 
     # ------------------------------------------------------------------
@@ -71,7 +71,7 @@ class BybitClient:
             api_secret = self._settings.api_secret.get_secret_value() or None
 
             is_testnet = (self._environment == MarketDataEnvironment.TESTNET)
-            
+
             self._http = PybitHTTP(
                 testnet=is_testnet,
                 demo=self._demo_flag,
@@ -138,7 +138,7 @@ class BybitClient:
         """Fetch the exchange server time as a UTC ``datetime``."""
         result = await self._call(self._http.get_server_time)
         time_nano = int(result["result"]["timeNano"])
-        # timeNano is in nanoseconds → convert to seconds
+        # timeNano is in nanoseconds â†’ convert to seconds
         return datetime.fromtimestamp(time_nano / 1_000_000_000, tz=UTC)
 
     @log_execution
@@ -245,7 +245,7 @@ class BybitClient:
             params["symbol"] = symbol
 
         instruments: list[InstrumentInfo] = []
-        
+
         while True:
             result = await self._call(
                 self._http_session.get_instruments_info,
@@ -253,7 +253,7 @@ class BybitClient:
             )
             data = result.get("result", {})
             raw_list = data.get("list", [])
-            
+
             for item in raw_list:
                 # strictly enforce MarketPilot v1 universe
                 if asset_type == AssetType.LINEAR:
@@ -263,7 +263,7 @@ class BybitClient:
                         continue
                     if item.get("status") != "Trading":
                         continue
-                        
+
                 lot_filter = item.get("lotSizeFilter", {})
                 price_filter = item.get("priceFilter", {})
                 leverage_filter = item.get("leverageFilter", {})
@@ -283,11 +283,11 @@ class BybitClient:
                         max_leverage=leverage_filter.get("maxLeverage", "1"),
                     )
                 )
-                
+
             next_cursor = data.get("nextPageCursor")
             if not next_cursor or symbol:
                 break
-                
+
             params["cursor"] = next_cursor
 
         return instruments
@@ -303,7 +303,7 @@ class BybitClient:
         """Return the active pybit HTTP session or raise."""
         if self._http is None:
             raise ExchangeConnectionError(
-                "Client not connected — call connect() first"
+                "Client not connected â€” call connect() first"
             )
         return self._http
 
@@ -349,8 +349,8 @@ class BybitClient:
         category: str = "linear",
         reduce_only: bool = False,
     ) -> dict[str, Any]:
-        """Place an order safely. 
-        
+        """Place an order safely.
+
         Raises RuntimeError immediately if attempting to execute on MAINNET.
         """
         if self._execution_mode != ExecutionMode.DEMO:
@@ -361,7 +361,7 @@ class BybitClient:
             raise ExchangeConnectionError("Client is not connected")
 
         logger.info(f"[{self._execution_mode.value}] Placing {side} {order_type} order for {qty} {symbol}")
-        
+
         kwargs = {
             "category": category,
             "symbol": symbol,
@@ -383,7 +383,7 @@ class BybitClient:
         """Query order status using orderLinkId."""
         if not self._http:
             raise ExchangeConnectionError("Client is not connected")
-            
+
         kwargs = {
             "category": category,
             "symbol": symbol,
@@ -403,7 +403,7 @@ class BybitClient:
         """Set stop loss and take profit for a position."""
         if not self._http:
             raise ExchangeConnectionError("Client is not connected")
-            
+
         kwargs = {
             "category": category,
             "symbol": symbol,
@@ -413,7 +413,7 @@ class BybitClient:
             kwargs["takeProfit"] = take_profit
         if stop_loss:
             kwargs["stopLoss"] = stop_loss
-            
+
         return await self._call(self._http.set_trading_stop, **kwargs)
 
     @retry(max_retries=3, backoff_base=1.0)
@@ -421,12 +421,21 @@ class BybitClient:
         """Fetch current positions."""
         if not self._http:
             raise ExchangeConnectionError("Client is not connected")
-            
+
         kwargs = {"category": category}
         if symbol:
             kwargs["symbol"] = symbol
-            
+
         return await self._call(self._http.get_positions, **kwargs)
+
+    @retry(max_retries=3, backoff_base=1.0)
+    async def get_wallet_balance(self, account_type: str = "UNIFIED") -> dict[str, Any]:
+        """Fetch wallet balance."""
+        if not self._http:
+            raise ExchangeConnectionError("Client is not connected")
+
+        return await self._call(self._http.get_wallet_balance, accountType=account_type)
+
 
     @log_execution
     @retry(max_retries=3, exceptions=(ExchangeAPIError, OSError))
@@ -434,21 +443,21 @@ class BybitClient:
         """Fetch all active regular and conditional orders."""
         if not self._http:
             raise ExchangeConnectionError("Client is not connected")
-            
+
         orders = {}
         cursor = ""
         while True:
             params = {"category": category, "settleCoin": settle_coin}
             if cursor:
                 params["cursor"] = cursor
-                
+
             res = await self._call(self._http.get_open_orders, **params)
             data = res.get("result", {})
             for o in data.get("list", []):
                 oid = o.get("orderId")
                 if oid:
                     orders[oid] = o
-            
+
             cursor = data.get("nextPageCursor")
             if not cursor:
                 break
@@ -460,24 +469,24 @@ class BybitClient:
         """Fetch a page of recent order history."""
         if not self._http:
             raise ExchangeConnectionError("Client is not connected")
-            
+
         params = {"category": category, "settleCoin": settle_coin, "limit": limit}
         if cursor:
             params["cursor"] = cursor
-            
+
         res = await self._call(self._http.get_order_history, **params)
         return res.get("result", {})
-        
+
     @log_execution
     @retry(max_retries=3, exceptions=(ExchangeAPIError, OSError))
     async def get_execution_history(self, category: str = "linear", settle_coin: str = "USDT", limit: int = 50, cursor: str = "") -> dict[str, Any]:
         """Fetch a page of recent execution/fill history."""
         if not self._http:
             raise ExchangeConnectionError("Client is not connected")
-            
+
         params = {"category": category, "settleCoin": settle_coin, "limit": limit}
         if cursor:
             params["cursor"] = cursor
-            
+
         res = await self._call(self._http.get_executions, **params)
         return res.get("result", {})

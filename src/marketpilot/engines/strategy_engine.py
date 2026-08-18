@@ -1,5 +1,5 @@
 """
-MarketPilot Engines � Strategy Engine.
+MarketPilot Engines ï¿½ Strategy Engine.
 
 Evaluates signals using a library of strategies and ranks them
 based on Confidence, Market Quality, Regime Match, and Expected RR.
@@ -24,9 +24,9 @@ class BaseStrategy(ABC):
 
     @abstractmethod
     def evaluate(
-        self, 
-        series: IndicatorSeries, 
-        regime: MarketRegime, 
+        self,
+        series: IndicatorSeries,
+        regime: MarketRegime,
         snapshot: ClosedInstrumentSnapshot,
         settings: StrategySettings
     ) -> SignalIntent | None:
@@ -36,14 +36,14 @@ class BaseStrategy(ABC):
 
 class EmaPullbackStrategy(BaseStrategy):
     """Buys in an uptrend when price pulls back to the fast EMA."""
-    
+
     def evaluate(self, series: IndicatorSeries, regime: MarketRegime, snapshot: ClosedInstrumentSnapshot, settings: StrategySettings) -> SignalIntent | None:
         point = series.latest
         if not point or point.ema_fast is None or point.ema_slow is None or point.atr is None or point.rsi is None:
             return None
 
         signal = SignalDirection.HOLD
-        
+
         last_price = snapshot.facts.close
 
         # Long Logic
@@ -51,7 +51,7 @@ class EmaPullbackStrategy(BaseStrategy):
             dist_to_ema = (last_price - point.ema_fast).copy_abs()
             if dist_to_ema < point.atr:
                 signal = SignalDirection.LONG
-                
+
         # Short Logic
         elif regime in (MarketRegime.WEAK_BEAR, MarketRegime.TRENDING_BEAR) and point.ema_fast < point.ema_slow:
             dist_to_ema = (last_price - point.ema_fast).copy_abs()
@@ -64,7 +64,7 @@ class EmaPullbackStrategy(BaseStrategy):
         # Risk parameters based ONLY on closed facts (no entry price assumed for execution)
         # Using the last closed price as the reference point for logical bands.
         sl_dist = point.atr * Decimal("1.5")
-        
+
         if signal == SignalDirection.LONG:
             sl = last_price - sl_dist
             tp = last_price + (sl_dist * Decimal("3.0"))
@@ -85,6 +85,7 @@ class EmaPullbackStrategy(BaseStrategy):
             direction=signal,
             symbol=snapshot.symbol,
             signal_timestamp=snapshot.creation_timestamp,
+            signal_timestamp_us=int(Decimal(str(snapshot.creation_timestamp)) * 1_000_000),
             logical_stop_loss=sl,
             logical_take_profit=tp,
             provenance_snapshot_id=snapshot.snapshot_id
@@ -97,17 +98,17 @@ class MomentumStrategy(BaseStrategy):
         point = series.latest
         if not point or point.rsi is None or point.atr is None:
             return None
-            
+
         signal = SignalDirection.HOLD
-        
+
         if point.rsi > Decimal("65") and snapshot.facts.momentum_24h > Decimal("0.05"):
             signal = SignalDirection.LONG
         elif point.rsi < Decimal("35") and snapshot.facts.momentum_24h < Decimal("-0.05"):
             signal = SignalDirection.SHORT
-            
+
         if signal == SignalDirection.HOLD:
             return None
-            
+
         last_price = snapshot.facts.close
         sl_dist = point.atr * Decimal("2")
         if signal == SignalDirection.LONG:
@@ -116,7 +117,7 @@ class MomentumStrategy(BaseStrategy):
         else:
             sl = last_price + sl_dist
             tp = last_price - (sl_dist * Decimal("2.1"))
-            
+
         identity = StrategyIdentity(
             registry_version="1.0",
             strategy_id="momentum",
@@ -130,6 +131,7 @@ class MomentumStrategy(BaseStrategy):
             direction=signal,
             symbol=snapshot.symbol,
             signal_timestamp=snapshot.creation_timestamp,
+            signal_timestamp_us=int(Decimal(str(snapshot.creation_timestamp)) * 1_000_000),
             logical_stop_loss=sl,
             logical_take_profit=tp,
             provenance_snapshot_id=snapshot.snapshot_id
@@ -161,24 +163,24 @@ class StrategyEngine:
         ]
 
     def evaluate(
-        self, 
-        series: IndicatorSeries, 
-        regime: MarketRegime, 
+        self,
+        series: IndicatorSeries,
+        regime: MarketRegime,
         snapshot: ClosedInstrumentSnapshot,
         decision_id: str
     ) -> tuple[list[SignalIntent], EngineMetadata]:
         """Evaluates all strategies and returns all actionable intents + metadata."""
         start_time = time.time()
-        
+
         all_intents: list[SignalIntent] = []
 
         for strategy in self._strategies:
             intent = strategy.evaluate(series, regime, snapshot, self._settings)
             if intent:
                 all_intents.append(intent)
-                
+
         processing_time_ms = (time.time() - start_time) * 1000
         metadata = EngineMetadata(processing_time_ms=processing_time_ms, decision_id=decision_id)
-        
+
         return all_intents, metadata
 

@@ -19,7 +19,7 @@ class TelegramNotifier(Notifier):
         self._polling_task = None
         self._is_polling = False
         self._offset = 0
-        
+
         # Event type to setting mapping
         self.dispatch_map = {
             NotificationType.STARTUP: self.settings.send_startup,
@@ -42,32 +42,32 @@ class TelegramNotifier(Notifier):
         """Asynchronously dispatches a notification if enabled."""
         if not self.settings.enabled or not self.settings.bot_token or not self.settings.chat_id:
             return
-            
+
         is_enabled_for_event = self.dispatch_map.get(event.event_type, False)
         if not is_enabled_for_event:
             return
-            
+
         message = self._format_message(event)
         if not message:
             return
-            
+
         await asyncio.to_thread(self._send_sync, message)
-        
+
     def _send_sync(self, text: str, chat_id: str = None) -> None:
         target_chat_id = chat_id or self.settings.chat_id
         try:
             data = json.dumps({
                 "chat_id": target_chat_id,
                 "text": text,
-                "parse_mode": "Markdown"
+                "parse_mode": "HTML"
             }).encode('utf-8')
-            
+
             req = urllib.request.Request(
-                f"{self.base_url}/sendMessage", 
-                data=data, 
+                f"{self.base_url}/sendMessage",
+                data=data,
                 headers={'Content-Type': 'application/json'}
             )
-            
+
             with urllib.request.urlopen(req, timeout=self.settings.timeout_seconds) as response:
                 if response.status != 200:
                     logger.warning(f"Telegram API returned {response.status}")
@@ -77,95 +77,31 @@ class TelegramNotifier(Notifier):
             logger.error(f"Unexpected error in Telegram notifier: {e}")
 
     async def start_polling(self):
-        if not self.settings.enabled or not self.settings.bot_token:
-            return
-        self._is_polling = True
-        self._polling_task = asyncio.create_task(self._poll_loop())
-        logger.info("Telegram command polling started.")
-        
+        """Deprecated: Telegram is now strictly an outbound observability channel."""
+        pass
+
     async def stop_polling(self):
-        self._is_polling = False
-        if self._polling_task:
-            self._polling_task.cancel()
-            try:
-                await self._polling_task
-            except asyncio.CancelledError:
-                pass
-        logger.info("Telegram command polling stopped.")
-        
-    async def _poll_loop(self):
-        while self._is_polling:
-            try:
-                updates = await asyncio.to_thread(self._get_updates_sync)
-                if updates:
-                    for update in updates:
-                        self._offset = update['update_id'] + 1
-                        if 'message' in update and 'text' in update['message']:
-                            await self._handle_command(update['message'])
-            except Exception as e:
-                logger.error(f"Telegram polling error: {e}")
-            await asyncio.sleep(2)
-            
-    def _get_updates_sync(self):
-        try:
-            url = f"{self.base_url}/getUpdates?offset={self._offset}&timeout=5"
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=10) as response:
-                data = json.loads(response.read().decode('utf-8'))
-                if data.get("ok"):
-                    return data.get("result", [])
-        except Exception:
-            pass
-        return []
-        
-    async def _handle_command(self, message: dict):
-        chat_id = str(message.get('chat', {}).get('id', ''))
-        text = message.get('text', '').strip()
-        
-        # Security: Whitelist Chat ID
-        if chat_id != str(self.settings.chat_id):
-            logger.warning(f"Unauthorized Telegram command from {chat_id}: {text}")
-            return
-            
-        if not text.startswith('/'):
-            return
-            
-        cmd = text.split()[0].lower()
-        response = ""
-        
-        # We rely on dashboard_app.state injected in daemon for read-only status
-        from marketpilot.dashboard.server import app as dashboard_app
-        daemon = dashboard_app.state.daemon
-        
-        if cmd == "/status":
-            cb_state = "NORMAL"
-            if daemon and daemon.health and daemon.health.cb:
-                cb_state = daemon.health.cb.state.value
-            response = f"*RC-1 Status*\nRunning\nCircuit Breaker: {cb_state}"
-        elif cmd == "/health":
-            response = "*Health Summary*\nEverything is operational."
-        elif cmd == "/incident":
-            response = "*Recent Incidents*\nNone recorded."
-        elif cmd == "/cycle":
-            response = "*Last Cycle*\nNo data yet."
-        else:
-            response = "Unknown command."
-            
-        await asyncio.to_thread(self._send_sync, response, chat_id)
+        """Deprecated: Telegram is now strictly an outbound observability channel."""
+        pass
 
     def _format_message(self, event: NotificationEvent) -> str:
         d = event.message_data
-        
+
+        # Always prefer pre-rendered canonical text if available
+        if "message" in d:
+            return d["message"]
+
+        # Legacy fallback
         if event.event_type == NotificationType.STARTUP:
             return (
-                "?? *MarketPilot RC-1 Started*\n"
+                "<b>MarketPilot RC-1 Started</b>\n"
                 f"Version: {d.get('version', 'unknown')}\n"
                 f"Config Hash: {d.get('config_hash', 'unknown')}\n"
             )
         elif event.event_type == NotificationType.CIRCUIT_BREAKER_HALTED:
-            msg = f"?? *HALTED*\nReason: {d.get('reason', 'Unknown')}"
+            msg = f"<b>HALTED</b>\nReason: {d.get('reason', 'Unknown')}"
             if event.decision_id:
                 msg += f"\nDecision ID: {event.decision_id}"
             return msg
         else:
-            return f"*{event.event_type.value}*"
+            return f"<b>{event.event_type.value}</b>"

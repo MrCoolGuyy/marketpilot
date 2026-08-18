@@ -21,14 +21,15 @@ class ActiveExposureState(BaseModel):
     timestamp: float
     active_position_ids: set[str]
     reserved_allocation_ids: set[str]
-    total_heat: Decimal
+    active_risk_amount: Decimal
+    reserved_risk_amount: Decimal
 
 class ExposureManager:
     """
     Canonical future state projection primitive.
     Handles atomic reservations and versioned CAS replacement.
     """
-    
+
     def __init__(self):
         self._lock = Lock()
         self._state = ActiveExposureState(
@@ -36,9 +37,10 @@ class ExposureManager:
             timestamp=0.0,
             active_position_ids=set(),
             reserved_allocation_ids=set(),
-            total_heat=Decimal("0")
+            active_risk_amount=Decimal("0"),
+            reserved_risk_amount=Decimal("0")
         )
-        
+
     def _generate_version(self) -> str:
         return uuid.uuid4().hex
 
@@ -50,7 +52,8 @@ class ExposureManager:
                 timestamp=self._state.timestamp,
                 active_position_ids=tuple(sorted(self._state.active_position_ids)),
                 reserved_allocation_ids=tuple(sorted(self._state.reserved_allocation_ids)),
-                total_heat=self._state.total_heat
+                active_risk_amount=self._state.active_risk_amount,
+                reserved_risk_amount=self._state.reserved_risk_amount
             )
 
     def reserve_if_version_matches(self, allocation_id: str, required_version: str, risk: Decimal) -> bool:
@@ -60,37 +63,40 @@ class ExposureManager:
         """
         if risk <= Decimal("0"):
             return False
-            
+
         with self._lock:
             if self._state.exposure_version != required_version:
                 return False
-                
+
             if allocation_id in self._state.reserved_allocation_ids:
                 return False
-                
+
             self._state.reserved_allocation_ids.add(allocation_id)
-            self._state.total_heat += risk
+            self._state.reserved_risk_amount += risk
             self._state.exposure_version = self._generate_version()
             return True
 
-    def replace_all(self, active_position_ids: list[str], total_heat: Decimal) -> None:
+    def replace_all(self, active_position_ids: list[str], active_risk_amount: Decimal, reserved_allocation_ids: list[str] = None, reserved_risk_amount: Decimal = Decimal("0")) -> None:
         """Hydrates or resets the exposure state from an authoritative source (e.g. recovery)."""
         with self._lock:
             self._state.active_position_ids = set(active_position_ids)
-            self._state.reserved_allocation_ids.clear()
-            self._state.total_heat = total_heat
+            self._state.reserved_allocation_ids = set(reserved_allocation_ids or [])
+            self._state.active_risk_amount = active_risk_amount
+            self._state.reserved_risk_amount = reserved_risk_amount
             self._state.exposure_version = self._generate_version()
 
-    def apply_confirmed_transition(self, allocation_id: str, position_id: str, new_heat: Decimal) -> None:
+    def apply_confirmed_transition(self, allocation_id: str, position_id: str, new_risk: Decimal, released_risk: Decimal) -> None:
         """
         Transitions a reservation into an active position upon durable acknowledgement.
+        Must explicitly pass the released_risk (the reserved amount being consumed) to prevent double counting.
         """
         with self._lock:
             if allocation_id in self._state.reserved_allocation_ids:
                 self._state.reserved_allocation_ids.remove(allocation_id)
-                
+                self._state.reserved_risk_amount = max(Decimal("0"), self._state.reserved_risk_amount - released_risk)
+
             self._state.active_position_ids.add(position_id)
-            self._state.total_heat = new_heat
+            self._state.active_risk_amount += new_risk
             self._state.exposure_version = self._generate_version()
 
     def release_prepared_reservation(self, allocation_id: str, released_risk: Decimal) -> None:
@@ -100,5 +106,5 @@ class ExposureManager:
         with self._lock:
             if allocation_id in self._state.reserved_allocation_ids:
                 self._state.reserved_allocation_ids.remove(allocation_id)
-                self._state.total_heat = max(Decimal("0"), self._state.total_heat - released_risk)
+                self._state.reserved_risk_amount = max(Decimal("0"), self._state.reserved_risk_amount - released_risk)
                 self._state.exposure_version = self._generate_version()

@@ -20,7 +20,13 @@ from marketpilot.dashboard.store import DashboardReadStore
 @pytest.fixture
 def fake_settings():
     settings = AppSettings()
-    settings.scanner.max_results = 1
+    settings.scanner.max_results = 5
+    settings.scanner.quote_coin = "USDT"
+    settings.scanner.min_turnover_24h = Decimal("1000000")
+    settings.portfolio.max_total_heat_ratio = Decimal("0.10")
+    settings.portfolio.max_simultaneous_lineages = 10
+    settings.portfolio.max_simultaneous_lineages = 1
+    settings.portfolio.allocated_capital = Decimal("20000")
     return settings
 
 @pytest.mark.asyncio
@@ -33,12 +39,12 @@ async def test_causal_quote_acquisition_order(fake_settings, monkeypatch, tmp_pa
     fake_repo_dir = tmp_path / "projections"
     fake_repo_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("marketpilot.dashboard.projections.DEFAULT_PROJECTIONS_DIR", fake_repo_dir)
-    
+
     ctx = MissionControlFactory.build_runtime(fake_settings)
-    
+
     # We will record the exact order of calls
     call_trace = []
-    
+
     # Mock Market Data Fetcher (Phase 1)
     raw_mock = RawMarketData(
         symbol="BTCUSDT",
@@ -50,16 +56,16 @@ async def test_causal_quote_acquisition_order(fake_settings, monkeypatch, tmp_pa
         timestamp=time.time()
     )
     ctx.market_data_fetcher.fetch_scan_candidates = AsyncMock(return_value=[raw_mock])
-    
+
     # Mock Scanner
     ctx.scanner.evaluate = MagicMock()
     ctx.scanner.evaluate.return_value.top_candidates = [MagicMock(symbol="BTCUSDT")]
-    
+
     # Mock Indicator Engine
     from marketpilot.models.indicators import IndicatorSeries
     from marketpilot.core.enums import Interval
     ctx.indicator.calculate = MagicMock(return_value=IndicatorSeries(symbol="BTCUSDT", interval=Interval.H1, points=[]))
-    
+
     # Mock Snapshot Builder (Phase 2 - Causal Boundary)
     original_build_causal = ctx.snapshot_builder.build_causal
     def mock_build_causal(*args, **kwargs):
@@ -70,17 +76,18 @@ async def test_causal_quote_acquisition_order(fake_settings, monkeypatch, tmp_pa
                                         candle_open_time=0, candle_close_time=0, creation_timestamp=time.time(), feature_set_version="1", facts=facts)
         return SnapshotBuildResult(outcome=SnapshotBuildOutcome.BUILT, snapshot=snap)
     ctx.snapshot_builder.build_causal = mock_build_causal
-    
+
     # Mock Strategy (Phase 3 - Intent Generation)
     original_strategy_evaluate = ctx.strategy.evaluate
     def mock_strategy_evaluate(*args, **kwargs):
         call_trace.append("strategy_evaluate")
         ident = StrategyIdentity(registry_version="1", strategy_id="test", strategy_version="1", parameter_set_id="test")
-        intent = SignalIntent(intent_id="intent_1", identity=ident, direction=SignalDirection.LONG, symbol="BTCUSDT", signal_timestamp=time.time(),
+        ts = time.time()
+        intent = SignalIntent(intent_id="intent_1", identity=ident, direction=SignalDirection.LONG, symbol="BTCUSDT", signal_timestamp=ts, signal_timestamp_us=int(Decimal(str(ts)) * 1000000),
                               logical_stop_loss=Decimal("90"), logical_take_profit=Decimal("110"), provenance_snapshot_id="snap_1")
         return [intent], MagicMock()
     ctx.strategy.evaluate = mock_strategy_evaluate
-    
+
     # Mock Exchange Client (Phase 4 - Quote Acquisition)
     original_get_tickers = ctx.client.get_tickers
     async def mock_get_tickers(*args, **kwargs):
@@ -88,35 +95,35 @@ async def test_causal_quote_acquisition_order(fake_settings, monkeypatch, tmp_pa
         return [Ticker(symbol="BTCUSDT", asset_type=AssetType.LINEAR, last_price="100", bid_price="100", ask_price="101",
                        high_24h="100", low_24h="100", price_change_percent_24h="1", volume_24h="100", turnover_24h="100", timestamp=time.time())]
     ctx.client.get_tickers = mock_get_tickers
-    
+
     pipeline = TradingPipeline(ctx)
-    
+
     # 2. Trigger the cycle
     from marketpilot.models.mission_control import PipelineContext
     event = MagicMock()
     event.ctx = PipelineContext(decision_id="test-decision", cycle_id="test-cycle", config_hash="test", market_time=time.time(), start_time=time.time())
     await pipeline._on_cycle_started(event)
-    
+
     # 3. Assert Causality Order
     # The true test of causal correctness is that quotes are fetched AFTER the signal is finalized.
     assert call_trace == ["build_causal", "strategy_evaluate", "get_tickers"], "Quote acquisition must happen after signal generation"
-    
+
     # 4. Prove Cross-Process Projection
     # We create a completely separate DashboardReadStore pointing to the same fake directory
     # It must not share any memory with the TradingPipeline
     dashboard_repo = FileProjectionRepository(directory=fake_repo_dir)
     dashboard_store = DashboardReadStore(repository=dashboard_repo)
-    
+
     # We expect a candidate or rejection to have been projected
     evidence = dashboard_store.get_all_evidence()
     assert len(evidence) == 1
-    
+
     model = evidence[0]
     assert model.strategy_id == "test"
     # Even if it rejected due to no evidence policy, it should project the rejection correctly
     assert model.evidence_status in ["NO_EVIDENCE", "INAPPLICABLE", "INSUFFICIENT", "VALIDATED"]
     assert model.deterministic_decision_key == "BTCUSDT:test:1:test:LONG"
-    
+
     # Intelligence should also be projected
     intelligence = dashboard_store.get_market_intelligence("BTCUSDT")
     assert intelligence is not None
@@ -136,7 +143,7 @@ async def test_causal_quote_acquisition_order(fake_settings, monkeypatch, tmp_pa
     # It might be None if we didn't run the full service, TradingPipeline doesn't write lifecycle.
     # We can write one manually to test liveness
     dashboard_repo.publish_lifecycle("test", "RUNNING", "CONTINUOUS", time.time(), time.time())
-    
+
     lifecycle = dashboard_store.get_lifecycle()
     assert lifecycle is not None
     assert lifecycle["status"] == "RUNNING"
@@ -146,7 +153,7 @@ async def test_causal_quote_acquisition_order(fake_settings, monkeypatch, tmp_pa
     raw_life = json.loads(dashboard_repo.lifecycle_file.read_text())
     raw_life["data"]["heartbeat_at"] = time.time() - 125  # > 120s stale
     dashboard_repo.lifecycle_file.write_text(json.dumps(raw_life))
-    
+
     # Router logic would now read stale
     assert "status" in lifecycle
     assert lifecycle["status"] == "RUNNING"
@@ -166,11 +173,11 @@ async def test_dashboard_market_feed_isolation(fake_settings, monkeypatch, tmp_p
     from marketpilot.dashboard.store import DashboardReadStore
     from marketpilot.dashboard.projections import FileProjectionRepository
     from marketpilot.dashboard.models import ProjectionMetadata
-    
+
     fake_repo_dir = tmp_path / "projections"
     fake_repo_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("marketpilot.dashboard.projections.DEFAULT_PROJECTIONS_DIR", fake_repo_dir)
-    
+
     # 1. Daemon writes canonical evaluation
     daemon_repo = FileProjectionRepository(directory=fake_repo_dir)
     meta = ProjectionMetadata(
@@ -206,21 +213,21 @@ async def test_dashboard_market_feed_isolation(fake_settings, monkeypatch, tmp_p
         is_eligible=False
     )
     daemon_repo.publish_daemon_evaluation([], [evidence], metadata=meta)
-    
+
     # Verify file is there
     initial_stat = daemon_repo.evidence_file.stat()
-    
+
     # 2. Dashboard observation feed updates market intelligence
     dashboard_store = DashboardReadStore(repository=daemon_repo)
-    
+
     # Mock MarketDataReader
     class FakeMarketDataReader:
         async def get_server_time(self): return time.time()
         async def get_klines(self, *args, **kwargs): return []
         async def get_tickers(self, *args, **kwargs): return []
-        
+
     client = FakeMarketDataReader()
-    
+
     # Instead of running the feed (which requires klines), we just call publish_market_observation directly
     # as this is the new API contract
     from marketpilot.dashboard.models import MarketIntelligenceReadModel
@@ -236,23 +243,23 @@ async def test_dashboard_market_feed_isolation(fake_settings, monkeypatch, tmp_p
         spread_bps="1", atr_percent="1", momentum_24h="1", trend_strength="1", trend_age_candles=1,
         snapshot_id="s1"
     )
-    
+
     dashboard_store.publish_market_observation([intelligence])
-    
+
     # 3. Assert daemon evaluation files were completely untouched
     final_stat = daemon_repo.evidence_file.stat()
     assert initial_stat.st_mtime == final_stat.st_mtime
-    
+
     # 4. Assert dashboard correctly reads canonical evaluation while appending memory market data
     dashboard_meta = dashboard_store.get_projection_metadata()
     assert dashboard_meta is not None
     assert dashboard_meta["evaluation_id"] == "cycle-real"
     assert dashboard_meta["intents_count"] == 5
-    
+
     dashboard_evidence = dashboard_store.get_all_evidence()
     assert len(dashboard_evidence) == 1
     assert dashboard_evidence[0].deterministic_decision_key == "BTCUSDT:test:1:p1:LONG"
-    
+
     dashboard_intel = dashboard_store.get_market_intelligence("ETHUSDT")
     assert dashboard_intel is not None
     assert dashboard_intel.snapshot_id == "s1"

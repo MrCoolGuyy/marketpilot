@@ -20,7 +20,7 @@ from marketpilot.core.enums import Interval, MarketDataEnvironment, OrderSide
 
 class MarketFacts(BaseModel, frozen=True):
     """Deterministic market features used downstream. Missing values are None, not fabricated."""
-    
+
     # OHLCV (Base)
     open: Decimal
     high: Decimal
@@ -28,14 +28,14 @@ class MarketFacts(BaseModel, frozen=True):
     close: Decimal
     volume: Decimal
     turnover: Decimal
-    
+
     # Required computed features
     spread_bps: Decimal
     atr_percent: Decimal
     momentum_24h: Decimal
     trend_strength: Decimal
     trend_age_candles: int
-    
+
     # Optional explicitly available features (OPTIONAL_PHASE4)
     funding_rate: Optional[Decimal] = Field(default=None, description="OPTIONAL_PHASE4")
     open_interest: Optional[Decimal] = Field(default=None, description="OPTIONAL_PHASE4")
@@ -49,18 +49,18 @@ class ClosedInstrumentSnapshot(BaseModel, frozen=True):
     """
     snapshot_id: str = Field(..., description="Unique ID for this exact market state")
     snapshot_version: str = Field(default="1.0")
-    
+
     symbol: str
     interval: Interval
     environment: MarketDataEnvironment
-    
+
     # Causal Timestamps
     candle_open_time: float
     candle_close_time: float = Field(..., description="Exact timestamp the boundary candle closed")
     creation_timestamp: float = Field(..., description="When this snapshot was finalized")
-    
+
     feature_set_version: str = Field(..., description="Identity of the feature calculation logic")
-    
+
     facts: MarketFacts = Field(..., description="Canonical facts derived strictly before creation_timestamp")
 
 
@@ -108,15 +108,16 @@ class SignalIntent(BaseModel, frozen=True):
     identity: StrategyIdentity
     direction: SignalDirection
     symbol: str = Field(..., description="The instrument symbol for this intent")
-    
+
     signal_timestamp: float = Field(..., description="When the signal was generated")
-    
+    signal_timestamp_us: int = Field(..., description="Canonical integer microseconds at domain boundary")
+
     # Logic boundaries (stop/target) defined conceptually (e.g. percentages, absolute price logic computed from facts)
     # In V1 we represent these as explicit prices *only* if derived purely from the closed facts (e.g. ATR bands).
     # They do NOT imply a fill price.
     logical_stop_loss: Decimal
     logical_take_profit: Decimal
-    
+
     provenance_snapshot_id: str = Field(..., description="ClosedInstrumentSnapshot ID that generated this signal")
 
 
@@ -134,10 +135,10 @@ class ExecutableQuoteSnapshot(BaseModel, frozen=True):
     quote_id: str
     symbol: str
     environment: MarketDataEnvironment
-    
+
     # Must be >= signal_timestamp
     quote_timestamp: float
-    
+
     bid: Decimal
     ask: Decimal
     # Optional liquidity depths
@@ -150,10 +151,10 @@ class PricedCandidate(BaseModel, frozen=True):
     candidate_id: str
     intent: SignalIntent
     quote: ExecutableQuoteSnapshot
-    
+
     pricing_status: PricingStatus
     executable_entry_price: Decimal
-    
+
     rejection_reason: Optional[str] = None
 
 
@@ -168,10 +169,10 @@ class EvidenceApplicability(BaseModel, frozen=True):
     parameter_set_id: str
     timeframe: Interval
     direction: SignalDirection
-    
+
     regime_model: str
     regime_state: str
-    
+
     market_scope: str
     execution_policy_version: str
     research_cutoff_timestamp: float
@@ -184,7 +185,7 @@ class OutcomeDistributionArtifact(BaseModel, frozen=True):
     """Immutable full-outcome distribution statistics for ExpectedGrossR."""
     artifact_id: str
     outcomes: tuple[OutcomeObservation, ...] = Field(..., min_length=1)
-    
+
     @property
     def expected_gross_r(self) -> Decimal:
         """Deterministically derived arithmetic mean of realized_r."""
@@ -212,7 +213,7 @@ class EvidenceAssessment(BaseModel, frozen=True):
     status: AssessmentStatus
     approved_expected_gross_r: Optional[Decimal] = None
     rejection_reason: Optional[str] = None
-    
+
     evidence_id: Optional[str] = None
 
 
@@ -232,6 +233,7 @@ class SizingDecision(BaseModel, frozen=True):
     """Deterministic provisional sizing from RiskEngine."""
     sizing_id: str
     provisional_quantity: Decimal
+    effective_stop_price: Decimal
     risk_policy_provenance: str
 
 
@@ -249,10 +251,10 @@ class FinalCandidate(BaseModel, frozen=True):
     pre_size_economics: PreSizeEconomics
     sizing: SizingDecision
     size_aware_economics: SizeAwareEconomics
-    
+
     is_eligible: bool
     rejection_reason: Optional[str] = None
-    
+
     # Final Ranking Deterministic Key
     @property
     def deterministic_decision_key(self) -> str:

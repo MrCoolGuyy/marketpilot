@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
+from typing import Optional
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -88,7 +89,7 @@ class ScannerSettings(BaseSettings):
     quote_coin: str = Field(default="USDT", description="Quote coin to filter by (e.g., USDT)")
     min_turnover_24h: float = Field(default=10_000_000.0, description="Minimum 24h turnover in quote coin")
     max_results: int = Field(default=20, ge=1, description="Maximum number of results to return")
-    
+
     # Engine Weights for Opportunity Score
     weight_liquidity: float = Field(default=0.20, description="Weight for liquidity/turnover")
     weight_spread: float = Field(default=0.10, description="Weight for tight spread")
@@ -98,7 +99,7 @@ class ScannerSettings(BaseSettings):
     weight_funding: float = Field(default=0.10, description="Weight for funding rate")
     weight_open_interest: float = Field(default=0.10, description="Weight for open interest")
     weight_trend_age: float = Field(default=0.10, description="Weight for trend age")
-    
+
     # Absolute Thresholds (If failed, Market Quality = 0)
     minimum_liquidity: float = Field(default=1_000_000.0, description="Minimum 24h turnover")
     minimum_volume: float = Field(default=10.0, description="Minimum 24h base volume")
@@ -122,20 +123,20 @@ class IndicatorSettings(BaseSettings):
 
     ema_fast: int = Field(default=20, gt=0, description="Fast EMA period")
     ema_slow: int = Field(default=50, gt=0, description="Slow EMA period")
-    
+
     rsi_period: int = Field(default=14, gt=0, description="RSI calculation period")
-    
+
     macd_fast: int = Field(default=12, gt=0, description="MACD fast EMA period")
     macd_slow: int = Field(default=26, gt=0, description="MACD slow EMA period")
     macd_signal: int = Field(default=9, gt=0, description="MACD signal EMA period")
-    
+
     atr_period: int = Field(default=14, gt=0, description="ATR calculation period")
     volume_sma_period: int = Field(default=20, gt=0, description="Volume SMA period")
 
     @property
     def is_macd_valid(self) -> bool:
         return self.macd_fast < self.macd_slow
-        
+
     def model_post_init(self, __context: object) -> None:
         if not self.is_macd_valid:
             raise ValueError(f"MACD fast ({self.macd_fast}) must be < slow ({self.macd_slow})")
@@ -154,10 +155,10 @@ class StrategySettings(BaseSettings):
     weight_market_quality: float = Field(default=0.25, description="Weight for Scanner Market Quality")
     weight_regime_match: float = Field(default=0.20, description="Weight for Regime Match")
     weight_expected_rr: float = Field(default=0.20, description="Weight for Expected RR")
-    
+
     def model_post_init(self, __context: object) -> None:
         total_weight = (
-            self.weight_confidence + self.weight_market_quality + 
+            self.weight_confidence + self.weight_market_quality +
             self.weight_regime_match + self.weight_expected_rr
         )
         if abs(total_weight - 1.0) > 0.001:
@@ -206,7 +207,7 @@ class RiskSettings(BaseSettings):
 
 class SimulationSettings(BaseSettings):
     """Shared mathematics for simulated paper trading and backtesting."""
-    
+
     leverage: int = Field(default=3, description="Fixed leverage multiplier")
     taker_fee_fraction: Decimal = Field(default=Decimal("0.0006"), description="Simulated taker fee fraction")
     slippage_bps: Decimal = Field(default=Decimal("5"), description="Slippage in basis points")
@@ -222,9 +223,9 @@ class SimulationSettings(BaseSettings):
 
 class PaperSettings(SimulationSettings):
     """Configuration for local paper trading simulation."""
-    
+
     model_config = SettingsConfigDict(env_prefix="PAPER_", env_file=".env", extra="ignore")
-    
+
     initial_equity: Decimal = Field(default=Decimal("10000"), description="Starting balance for paper trading")
 
     def model_post_init(self, __context: object) -> None:
@@ -235,9 +236,9 @@ class PaperSettings(SimulationSettings):
 
 class BacktestSettings(SimulationSettings):
     """Configuration for historical backtesting."""
-    
+
     model_config = SettingsConfigDict(env_prefix="BACKTEST_", env_file=".env", extra="ignore")
-    
+
     initial_equity: Decimal = Field(default=Decimal("10000"), description="Starting balance for backtesting")
 
     def model_post_init(self, __context: object) -> None:
@@ -247,13 +248,13 @@ class BacktestSettings(SimulationSettings):
 
 class OptimizationSettings(BaseSettings):
     """Configuration for historical parameter optimization."""
-    
+
     model_config = SettingsConfigDict(env_prefix="OPT_", env_file=".env", extra="ignore")
-    
+
     train_fraction: Decimal = Field(default=Decimal("0.70"), description="Fraction of dataset to use for training")
     minimum_train_trades: int = Field(default=5, description="Minimum trades required in training to qualify")
     maximum_candidates: int = Field(default=100, description="Hard cap on total generated candidates")
-    
+
     grid_rsi_long_min: list[int] = Field(default_factory=lambda: [52, 55, 58])
     grid_rsi_long_max: list[int] = Field(default_factory=lambda: [68, 70, 72])
     grid_rsi_short_min: list[int] = Field(default_factory=lambda: [28, 30, 32])
@@ -277,7 +278,7 @@ class TelegramSettings(BaseSettings):
     bot_token: SecretStr = Field(default=SecretStr(""))
     chat_id: str = Field(default="")
     timeout_seconds: int = Field(default=5, ge=1)
-    
+
     send_startup: bool = Field(default=True)
     send_trade: bool = Field(default=True)
     send_daily_summary: bool = Field(default=True)
@@ -293,13 +294,30 @@ class DemoSettings(BaseSettings):
     api_key: SecretStr = Field(default=SecretStr(""), description="Bybit Demo Trading API key")
     api_secret: SecretStr = Field(default=SecretStr(""), description="Bybit Demo Trading API secret")
     execution_enabled: bool = Field(default=False, description="Master switch for Demo execution")
-    
+
     # Autopilot Guards
     auto_submit_enabled: bool = Field(default=False, description="Enable Autopilot to submit Demo orders (Default OFF)")
     kill_switch: bool = Field(default=False, description="Emergency stop for all Demo executions")
     max_daily_trades: int = Field(default=5, ge=0, description="Maximum number of autopilot demo trades per day")
     daily_loss_limit: Decimal = Field(default=Decimal("0.05"), description="Maximum daily loss fraction before halting")
 
+
+class PortfolioSettings(BaseSettings):
+    """Phase-5 Capital Allocation Rules."""
+    model_config = SettingsConfigDict(env_prefix="MARKETPILOT_PORTFOLIO_", env_file=".env", extra="ignore")
+
+    allocated_capital: Optional[Decimal] = Field(
+        default=None,
+        description="Explicitly allocated risk capital for MarketPilot."
+    )
+    max_total_heat_ratio: Decimal = Field(
+        default=Decimal("0.10"),
+        description="Maximum sum of (risk/equity) across all active and pending reservations."
+    )
+    max_simultaneous_lineages: int = Field(
+        default=1,
+        description="Maximum active logical lineages allowed globally."
+    )
 
 # ---------------------------------------------------------------------------
 # Root settings
@@ -330,5 +348,8 @@ class AppSettings(BaseSettings):
     optimization: OptimizationSettings = Field(default_factory=OptimizationSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     demo: DemoSettings = Field(default_factory=DemoSettings)
-    
+    portfolio: PortfolioSettings = Field(default_factory=PortfolioSettings)
+
     dashboard_control_key: SecretStr = Field(default=SecretStr(""), description="Secret key required for Dashboard POST endpoints")
+
+AppSettings.model_rebuild()

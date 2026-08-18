@@ -18,17 +18,17 @@ from marketpilot.models.causal import FinalCandidate
 class EventJournalEntry(BaseModel, frozen=True):
     """A log of a single lifecycle event for a position."""
     event: PositionEvent
-    
+
 class AnalyticsJournalEntry(BaseModel, frozen=True):
     """Detailed post-trade analytics."""
     decision_id: str
     symbol: str
-    
+
     pnl: Decimal = Field(default=Decimal("0"))
     mae: Decimal = Field(default=Decimal("0"), description="Maximum Adverse Excursion")
     mfe: Decimal = Field(default=Decimal("0"), description="Maximum Favorable Excursion")
     duration_seconds: float = Field(default=0.0)
-    
+
     total_fees: Decimal = Field(default=Decimal("0"))
     total_slippage_bps: Decimal = Field(default=Decimal("0"))
 
@@ -36,14 +36,14 @@ class TradeExecutionRecord(BaseModel, frozen=True):
     """The final artifact representing a complete trade lifecycle from decision to exit."""
     decision_id: str
     symbol: str
-    
+
     trade_plan: TradePlan
     execution_result: ExecutionResult
     reconciliation: ReconciliationReport
-    
+
     events: list[PositionEvent] = Field(default_factory=list)
     analytics: Optional[AnalyticsJournalEntry] = Field(default=None)
-    
+
     portfolio_snapshot: Optional[PortfolioSnapshot] = Field(default=None)
 
 # --- Phase 1 Additive Immutable Journal Events ---
@@ -90,3 +90,31 @@ class CounterfactualOutcomeObserved(BaseModel):
     model_config = {"frozen": True}
     decision_id: str
     simulated_outcome: str
+
+# --- Phase 5 Durable Journal Events ---
+
+class ReservationPrepared(BaseModel):
+    """Event emitted when capital is prepared in memory but not yet committed."""
+    model_config = {"frozen": True}
+    type: str = Field(default="ReservationPrepared", frozen=True)
+    allocation_id: str
+    lineage_identity: str
+    risk_amount: Decimal
+    timestamp: float
+
+class AllocationCommitted(BaseModel):
+    """Event emitted when the intent is durably authorized and becomes a true active lineage."""
+    model_config = {"frozen": True}
+    type: str = Field(default="AllocationCommitted", frozen=True)
+    allocation_id: str
+    lineage_identity: str
+    risk_amount: Decimal
+    timestamp: float
+
+class ReservationAborted(BaseModel):
+    """Event emitted when a prepared reservation fails to durably commit or fails CAS."""
+    model_config = {"frozen": True}
+    type: str = Field(default="ReservationAborted", frozen=True)
+    allocation_id: str
+    timestamp: float
+    reason: str

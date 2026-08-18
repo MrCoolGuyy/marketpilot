@@ -129,7 +129,7 @@ async def _cmd_scan(settings: object, args: list[str]) -> None:
             except ValueError:
                 print("Error: --min-turnover must be a valid number.")
                 sys.exit(1)
-            
+
             if min_turnover < 0 or str(min_turnover) in ("inf", "-inf", "nan"):
                 print("Error: --min-turnover must be a positive finite number.")
                 sys.exit(1)
@@ -154,7 +154,7 @@ async def _cmd_scan(settings: object, args: list[str]) -> None:
         scanner_settings_dict["min_turnover_24h"] = min_turnover
     if limit is not None:
         scanner_settings_dict["max_results"] = limit
-    
+
     from marketpilot.config.settings import ScannerSettings
     scanner_settings = ScannerSettings(**scanner_settings_dict)
 
@@ -162,28 +162,28 @@ async def _cmd_scan(settings: object, args: list[str]) -> None:
 
     try:
         await ctx.client.connect()
-        
+
         limit = ctx.settings.scanner.max_results
         quote_coin = ctx.settings.scanner.quote_coin
         min_turnover = ctx.settings.scanner.min_turnover_24h
-        
+
         raw_candidates = await ctx.market_data_fetcher.fetch_scan_candidates(
             quote_coin=quote_coin,
             min_turnover_24h=min_turnover,
             limit=limit
         )
-        
+
         snapshots = []
         for raw in raw_candidates:
             snapshots.append(ctx.snapshot_builder.build(raw))
-            
+
         scanner_result = ctx.scanner.evaluate(snapshots)
         results = scanner_result.top_candidates
 
         print()
         print(f"  {'Rank':<4} | {'Symbol':<12} | {'Last Price':<12} | {'24h Change':<10} | {'24h Turnover'}")
         print("  " + "-" * 75)
-        
+
         from decimal import Decimal
         for idx, r in enumerate(results, 1):
             try:
@@ -191,7 +191,7 @@ async def _cmd_scan(settings: object, args: list[str]) -> None:
                 change_fmt = f"{pcnt_decimal:.2f}%"
             except Exception:
                 change_fmt = f"{r.momentum_24h}%"
-                
+
             # format turnover in millions
             try:
                 turnover_decimal = Decimal(r.liquidity_turnover_24h) / Decimal("1000000")
@@ -200,10 +200,10 @@ async def _cmd_scan(settings: object, args: list[str]) -> None:
                 turnover_m = r.liquidity_turnover_24h
             print(f"  {idx:<4} | {r.symbol:<12} | {r.last_price:<12} | {change_fmt:<10} | {turnover_m}")
         print()
-        
+
         print(f"  Market Health: {scanner_result.market_health:.2f}%")
         print()
-        
+
     except Exception as exc:
         logger.error("Scan failed: {}", exc)
         print()
@@ -289,7 +289,7 @@ async def _cmd_indicators(settings: object, args: list[str]) -> None:
         print()
         print(f"  Indicators for {symbol} ({interval.value}m, latest closed candle at {latest.open_time})")
         print("  " + "-" * 75)
-        
+
         def fmt(val: object) -> str:
             return f"{val:.4f}" if val is not None else "N/A"
 
@@ -317,9 +317,9 @@ def _filter_closed_klines(klines: list, interval) -> list:
     """Helper to filter out the active, non-closed candle."""
     if not klines:
         return []
-        
+
     klines_sorted = sorted(klines, key=lambda k: k.open_time)
-    
+
     interval_str = interval.value
     try:
         interval_mins = int(interval_str)
@@ -328,10 +328,10 @@ def _filter_closed_klines(klines: list, interval) -> list:
         elif interval_str == "W": interval_mins = 10080
         elif interval_str == "M": interval_mins = 43200
         else: interval_mins = 60
-        
+
     from datetime import datetime, timedelta, UTC
     latest_close_time = klines_sorted[-1].open_time + timedelta(minutes=interval_mins)
-    
+
     if datetime.now(tz=UTC) < latest_close_time:
         return klines_sorted[:-1]
     return klines_sorted
@@ -384,35 +384,35 @@ async def _cmd_strategy(settings: object, args: list[str]) -> None:
 
     try:
         await ctx.client.connect()
-        
+
         # 1. Fetch raw data
         raw = await ctx.market_data_fetcher.fetch(
             symbol=symbol,
             interval=interval,
             kline_limit=limit + 1
         )
-        
+
         # Drop active candle
         raw.klines = _filter_closed_klines(raw.klines, interval)
         if not raw.klines:
             print(f"Not enough closed klines for {symbol}.")
             sys.exit(0)
-            
+
         # 2. Build Snapshot
         snapshot = ctx.snapshot_builder.build(raw)
-        
+
         # 3. Indicators & Regime
         series = ctx.indicator.calculate(raw.klines)
         regime = ctx.regime.evaluate(series, snapshot.last_price)
-        
+
         # 4. Strategy (Generates SignalIntent)
         intents, meta = ctx.strategy.evaluate(series, regime, snapshot, decision_id="cli_strategy")
-        
+
         print()
         print("  [ANALYSIS ONLY - PHASE 4 CAUSAL EVALUATION]")
         print("  " + "-" * 75)
         print(f"  Strategy Intents for {symbol} ({interval.value}m)")
-        
+
         if not intents:
             print("  No intents generated.")
         else:
@@ -423,13 +423,13 @@ async def _cmd_strategy(settings: object, args: list[str]) -> None:
             from marketpilot.models.causal import ExecutableQuoteSnapshot
             from decimal import Decimal
             import time
-            
+
             pipeline = CausalPipeline(
                 pricing=PricingPolicy(),
                 validation=ValidationPolicy([]),
                 economics=CausalEconomicsEngine(account_equity=Decimal("1000"))
             )
-            
+
             quotes = {}
             live_tickers = await ctx.client.get_tickers(symbol, asset_type=AssetType.LINEAR)
             if live_tickers:
@@ -445,9 +445,9 @@ async def _cmd_strategy(settings: object, args: list[str]) -> None:
                 )
                 for intent in intents:
                     quotes[intent.identity.strategy_id] = q
-                    
+
             res = pipeline.process_signals(intents, quotes, "trend_smoke", "BULL", "ALL")
-            
+
             for c in res.candidates:
                 print(f"  Candidate: {c.priced_candidate.intent.identity.strategy_id} -> {c.priced_candidate.intent.direction.value}")
                 print(f"    Entry      : {c.priced_candidate.executable_entry_price}")
@@ -518,7 +518,7 @@ async def _cmd_risk(settings: object, args: list[str]) -> None:
         else:
             print(f"Unknown argument: {args[i]}")
             sys.exit(1)
-            
+
     if equity_val is None:
         print("Error: --equity is required.")
         sys.exit(1)
@@ -533,30 +533,30 @@ async def _cmd_risk(settings: object, args: list[str]) -> None:
 
     try:
         await ctx.client.connect()
-        
+
         # 1. Fetch raw data
         raw = await ctx.market_data_fetcher.fetch(
             symbol=symbol,
             interval=interval,
             kline_limit=limit + 1
         )
-        
+
         # Drop active candle
         raw.klines = _filter_closed_klines(raw.klines, interval)
         if not raw.klines:
             print(f"Not enough closed klines for {symbol}.")
             sys.exit(0)
-            
+
         # 2. Build Snapshot
         snapshot = ctx.snapshot_builder.build(raw)
-        
+
         # 3. Indicators & Regime
         series = ctx.indicator.calculate(raw.klines)
         regime = ctx.regime.evaluate(series, snapshot.last_price)
-        
+
         # 4. Strategy
         intents, meta = ctx.strategy.evaluate(series, regime, snapshot, decision_id="cli_risk")
-        
+
         print()
         print("  [PHASE-4 READ ONLY - NO PHASE-5 PORTFOLIO AUTHORIZATION EXISTS]")
         print("  " + "-" * 75)
@@ -582,21 +582,21 @@ async def _cmd_paper(settings: object, args: list[str]) -> None:
 
     subcommand = args[0]
     confirm = "--confirm" in args
-    
+
     from marketpilot.storage.database import DatabaseManager
     from marketpilot.paper.service import PaperTradingService
-    
+
     db = DatabaseManager(settings.storage)  # type: ignore[attr-defined]
     paper_service = PaperTradingService(settings.paper)  # type: ignore[attr-defined]
-    
+
     await db.initialize()
-    
+
     try:
         if subcommand == "reset":
             if not confirm:
                 print("Error: Paper reset requires --confirm.")
                 sys.exit(1)
-                
+
             equity_val = None
             for i, arg in enumerate(args):
                 if arg == "--equity" and i + 1 < len(args):
@@ -609,14 +609,14 @@ async def _cmd_paper(settings: object, args: list[str]) -> None:
                     except InvalidOperation:
                         print("Error: --equity must be a valid number.")
                         sys.exit(1)
-                        
+
             if equity_val is not None:
                 settings.paper.initial_equity = equity_val  # type: ignore[attr-defined]
-                
+
             async with db.session() as session:
                 async with session.begin():
                     await paper_service.reset(session)
-            
+
             print()
             print("  [PAPER ONLY - NO REAL ORDER]")
             print("  ---------------------------------------------------------------------------")
@@ -626,15 +626,15 @@ async def _cmd_paper(settings: object, args: list[str]) -> None:
         elif subcommand == "status":
             from marketpilot.exchange.bybit_client import BybitClient
             client = BybitClient(settings.exchange)  # type: ignore[attr-defined]
-            
+
             market_prices = {}
             try:
                 await client.connect()
-                
+
                 # We need public tickers to get latest price for open positions
                 async with db.session() as session:
                     snapshot = await paper_service.get_snapshot(session, market_prices)
-                    
+
                 if snapshot.positions:
                     # Fetch real prices for active positions
                     tickers = await client.get_tickers(category="linear")
@@ -642,11 +642,11 @@ async def _cmd_paper(settings: object, args: list[str]) -> None:
                         if any(p.symbol == t.symbol for p in snapshot.positions):
                             from decimal import Decimal
                             market_prices[t.symbol] = Decimal(t.last_price)
-                            
+
                     # Recompute snapshot with real market prices
                     async with db.session() as session:
                         snapshot = await paper_service.get_snapshot(session, market_prices)
-                        
+
             finally:
                 await client.disconnect()
 
@@ -659,7 +659,7 @@ async def _cmd_paper(settings: object, args: list[str]) -> None:
             print(f"  Equity      : {snapshot.equity:.4f}")
             print(f"  Realized PnL: {snapshot.realized_pnl:.4f}")
             print(f"  Unreal. PnL : {snapshot.unrealized_pnl:.4f}")
-            
+
             print()
             print("  Open Positions:")
             if not snapshot.positions:
@@ -667,20 +667,20 @@ async def _cmd_paper(settings: object, args: list[str]) -> None:
             else:
                 for p in snapshot.positions:
                     print(f"    - {p.symbol} {p.direction.value} | Qty: {p.quantity} | Entry: {p.entry_price:.4f} | Mark: {p.mark_price:.4f} | PnL: {p.unrealized_pnl:.4f}")
-                    
+
             print()
 
         elif subcommand == "open":
             if not confirm:
                 print("Error: Paper open requires --confirm.")
                 sys.exit(1)
-                
+
             if len(args) < 2 or args[1].startswith("--"):
                 print("Error: Paper open requires SYMBOL.")
                 sys.exit(1)
-                
+
             symbol = args[1]
-            
+
             from marketpilot.core.enums import AssetType, Interval
             from marketpilot.exchange.bybit_client import BybitClient
             from marketpilot.indicators.service import IndicatorService
@@ -728,11 +728,11 @@ async def _cmd_paper(settings: object, args: list[str]) -> None:
 
                 series = indicator_service.calculate(closed_klines)
                 signal = strategy_service.evaluate(series)
-                
+
                 latest_indicator = series.latest
                 atr_val = latest_indicator.atr if latest_indicator else None
                 entry_price = Decimal(closed_klines[-1].close)
-                
+
                 async with db.session() as session:
                     snapshot = await paper_service.get_snapshot(session, {})
                     equity_val = snapshot.equity
@@ -743,20 +743,20 @@ async def _cmd_paper(settings: object, args: list[str]) -> None:
                     atr=atr_val,
                     account_equity=equity_val
                 )
-                
+
                 if not assessment.eligible_for_paper_trading:
                     print()
                     print("  [PAPER ONLY - NO REAL ORDER]")
                     print("  ---------------------------------------------------------------------------")
                     print(f"  Rejected: {assessment.reasons}")
                     print()
-                    
+
                     from marketpilot.core.factory import MissionControlFactory
                     from marketpilot.notifications.notification_models import NotificationEvent, NotificationType
                     notifier = TelegramNotifier(settings.telegram) # type: ignore
                     await notifier.notify(NotificationEvent(event_type=NotificationType.PAPER_TRADE, message_data={"message": f"⚠️ [PAPER ONLY] Action Rejected\n\nSymbol: {symbol}\nAction: {"OPEN"}\nReason: {", ".join(assessment.reasons) if assessment.reasons else "Unknown"}\n\nNo real order was placed."}))
                     sys.exit(1)
-                    
+
                 async with db.session() as session:
                     async with session.begin():
                         trade = await paper_service.open_position(session, assessment, entry_price)
@@ -765,7 +765,7 @@ async def _cmd_paper(settings: object, args: list[str]) -> None:
                         from marketpilot.notifications.notification_models import NotificationEvent, NotificationType
                 notifier = TelegramNotifier(settings.telegram) # type: ignore
                 await notifier.notify(NotificationEvent(event_type=NotificationType.PAPER_TRADE, message_data={"message": f"🟢 [PAPER ONLY] Position Opened\n\nSymbol: {trade.symbol}\nDirection: {trade.direction}\nQty: {trade.quantity}\nEntry: {trade.entry_price}\n\nNo real order was placed."}))
-                        
+
                 print()
                 print("  [PAPER ONLY - NO REAL ORDER]")
                 print("  ---------------------------------------------------------------------------")
@@ -781,13 +781,13 @@ async def _cmd_paper(settings: object, args: list[str]) -> None:
             if not confirm:
                 print("Error: Paper close requires --confirm.")
                 sys.exit(1)
-                
+
             if len(args) < 2 or args[1].startswith("--"):
                 print("Error: Paper close requires SYMBOL.")
                 sys.exit(1)
-                
+
             symbol = args[1]
-            
+
             from marketpilot.exchange.bybit_client import BybitClient
             client = BybitClient(settings.exchange)  # type: ignore[attr-defined]
             try:
@@ -799,15 +799,15 @@ async def _cmd_paper(settings: object, args: list[str]) -> None:
                         from decimal import Decimal
                         market_price = Decimal(t.last_price)
                         break
-                        
+
                 if market_price is None:
                     print(f"Could not fetch public price for {symbol}")
                     sys.exit(1)
-                    
+
                 async with db.session() as session:
                     async with session.begin():
                         trade = await paper_service.close_position(session, symbol, market_price)
-                        
+
                         from marketpilot.core.factory import MissionControlFactory
                         from marketpilot.notifications.notification_models import NotificationEvent, NotificationType
                 notifier = TelegramNotifier(settings.telegram) # type: ignore
@@ -829,7 +829,7 @@ async def _cmd_paper(settings: object, args: list[str]) -> None:
         else:
             print(f"Unknown paper command: {subcommand}")
             sys.exit(1)
-            
+
     finally:
         await db.close()
 
@@ -918,7 +918,7 @@ async def _cmd_backtest(settings: object, args: list[str]) -> None:
         print(f"  Backtest Summary for {result.symbol} ({result.interval.value}m)")
         print(f"  Period: {result.start_time} to {result.end_time}")
         print("  ---------------------------------------------------------------------------")
-        
+
         m = result.metrics
         def fmt(val: object, suffix: str = "") -> str:
             return f"{val:.4f}{suffix}" if val is not None else "N/A"
@@ -931,7 +931,7 @@ async def _cmd_backtest(settings: object, args: list[str]) -> None:
         print(f"  Win Rate        : {fmt(m.win_rate * 100 if m.win_rate else None, '%')}")
         print(f"  Profit Factor   : {fmt(m.profit_factor)}")
         print("  ---------------------------------------------------------------------------")
-        
+
         if result.trades:
             print("  Recent Trades:")
             for t in result.trades[-5:]:
@@ -944,12 +944,12 @@ async def _cmd_backtest(settings: object, args: list[str]) -> None:
         store = ReportStore()
         store.save_backtest(result)
         print("  [✓] Report saved to backtest.latest.json")
-        
+
         from marketpilot.core.factory import MissionControlFactory
         from marketpilot.notifications.notification_models import NotificationEvent, NotificationType
         notifier = TelegramNotifier(settings.telegram) # type: ignore
         await notifier.notify(NotificationEvent(event_type=NotificationType.EXECUTION_SUCCESS, message_data={"message": f"📊 [HISTORICAL ONLY] Run Completed\nType: backtest\nSymbol: {result.symbol} ({result.interval.value})\nTotal Return: {result.metrics.total_return_fraction * Decimal('100')}%"}))
-        
+
         print()
 
     except Exception as exc:
@@ -1011,7 +1011,7 @@ async def _cmd_optimize(settings: object, args: list[str]) -> None:
     client = BybitClient(settings.exchange)  # type: ignore[attr-defined]
     indicator_service = IndicatorService(settings.indicators)  # type: ignore[attr-defined]
     risk_service = ctx.risk  # type: ignore[attr-defined]
-    
+
     # We pass the factory and kwargs instead of a built engine,
     # so the service can safely construct them per candidate.
     optimization_service = OptimizationService(
@@ -1052,13 +1052,13 @@ async def _cmd_optimize(settings: object, args: list[str]) -> None:
         print(f"  Split Date      : {result.split_time}")
         print(f"  Total Candidates: {len(result.candidates)}")
         print("  ---------------------------------------------------------------------------")
-        
+
         def fmt(val: object, suffix: str = "") -> str:
             return f"{val:.4f}{suffix}" if val is not None else "N/A"
 
         if result.best_candidate:
             print("  Top 10 Ranked Candidates (Selected by TRAINING metrics only):")
-            
+
             # Sort all eligible by training objective
             eligible = [c for c in result.candidates if c.is_eligible]
             eligible.sort(
@@ -1068,16 +1068,16 @@ async def _cmd_optimize(settings: object, args: list[str]) -> None:
                     r.candidate.label
                 )
             )
-            
+
             for idx, res in enumerate(eligible[:10], 1):
                 label = res.candidate.label
                 tm = res.train_metrics
                 vm = res.val_metrics
-                
+
                 print(f"  {idx}. {label:<10} | Train Obj: {fmt(res.train_objective)} | Train Ret: {fmt(tm.total_return_fraction * 100, '%')} | Val Ret: {fmt(vm.total_return_fraction * 100, '%')} | Val DD: {fmt(vm.max_drawdown_fraction * 100, '%')} | Trades (T/V): {tm.trade_count}/{vm.trade_count}")
         else:
             print("  No eligible candidates found (none met minimum trade requirements).")
-            
+
         print("  ---------------------------------------------------------------------------")
         print("  * Winner is selected strictly from training data performance.")
         print()
@@ -1086,12 +1086,12 @@ async def _cmd_optimize(settings: object, args: list[str]) -> None:
         store = ReportStore()
         store.save_optimization(result)
         print("  [✓] Report saved to optimization.latest.json")
-        
+
         from marketpilot.core.factory import MissionControlFactory
         from marketpilot.notifications.notification_models import NotificationEvent, NotificationType
         notifier = TelegramNotifier(settings.telegram) # type: ignore
         await notifier.notify(NotificationEvent(event_type=NotificationType.EXECUTION_SUCCESS, message_data={"message": f"📊 [HISTORICAL ONLY] Run Completed\nType: optimize\nSymbol: {result.symbol} ({result.interval.value})\nBest: {result.best_candidate.candidate.label if result.best_candidate else 'None'}"}))
-        
+
         print()
 
     except Exception as exc:
@@ -1109,7 +1109,7 @@ def _cmd_dashboard(settings: object, args: list[str]) -> None:
     """Execute the ``dashboard`` command."""
     host = "127.0.0.1"
     port = 8000
-    
+
     i = 0
     while i < len(args):
         if args[i] == "--host" and i + 1 < len(args):
@@ -1122,10 +1122,10 @@ def _cmd_dashboard(settings: object, args: list[str]) -> None:
             print(f"Unknown argument: {args[i]}")
             import sys
             sys.exit(1)
-            
+
     import socket
     import sys
-    
+
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind((host, port))
@@ -1133,7 +1133,7 @@ def _cmd_dashboard(settings: object, args: list[str]) -> None:
         print(f"\n  [ERR] Port {port} on {host} is already in use.")
         print(f"        Ensure no other MarketPilot dashboard instances are running.")
         sys.exit(1)
-        
+
     import uvicorn
     print(f"Starting MarketPilot Dashboard on http://{host}:{port}")
     uvicorn.run("marketpilot.dashboard.server:app", host=host, port=port, log_level="info")
@@ -1145,13 +1145,13 @@ async def _cmd_telegram(settings: object, args: list[str]) -> None:
         print("Usage: uv run marketpilot telegram {status, test}")
         import sys
         sys.exit(1)
-        
+
     subcommand = args[0]
     confirm = "--confirm" in args
-    
+
     from marketpilot.core.factory import MissionControlFactory
     notifier = TelegramNotifier(settings.telegram) # type: ignore
-    
+
     if subcommand == "status":
         print()
         print("  [TELEGRAM STATUS]")
@@ -1163,6 +1163,10 @@ async def _cmd_telegram(settings: object, args: list[str]) -> None:
             masked_chat = chat_id[:3] + "***" + chat_id[-2:] if len(chat_id) > 4 else "***"
             print(f"  Chat ID: {masked_chat}")
             print(f"  Timeout: {settings.telegram.timeout_seconds}s") # type: ignore
+            print()
+            print("  [PHASE-5 ADMISSION ALERTS]")
+            print("  This channel will receive strictly outbound read-only notifications.")
+            print("  No inbound trading commands are permitted or evaluated.")
         print("  ---------------------------------------------------------------------------")
         print()
     elif subcommand == "test":
@@ -1170,18 +1174,142 @@ async def _cmd_telegram(settings: object, args: list[str]) -> None:
             print("Error: Telegram test requires --confirm.")
             import sys
             sys.exit(1)
-            
+
         if not notifier.settings.enabled:
             print("Error: Telegram notifier is disabled or incompletely configured.")
             print("No HTTP request will be made.")
             import sys
             sys.exit(1)
-            
+
         print()
-        print("  [OUTBOUND NOTIFICATION ONLY - NO REAL ORDER]")
+        print("  [OUTBOUND NOTIFICATION ONLY - PHASE 5 FORMATTER TEST]")
         print("  Sending test message...")
         from marketpilot.notifications.notification_models import NotificationEvent, NotificationType
-        await notifier.notify(NotificationEvent(event_type=NotificationType.PAPER_TRADE, message_data={"message": f"⚠️ [PAPER ONLY] Action Rejected\n\nSymbol: {"TEST-USDT"}\nAction: {"TEST"}\nReason: {"This is a test notification."}\n\nNo real order was placed."}))
+        from marketpilot.notifications.telegram_formatters import format_phase5_admission
+        from marketpilot.models.causal import (
+            FinalCandidate, PricedCandidate, SignalIntent, StrategyIdentity, SignalDirection,
+            ExecutableQuoteSnapshot, PricingStatus, EvidenceAssessment, AssessmentStatus,
+            PreSizeEconomics, SizingDecision, SizeAwareEconomics, Interval
+        )
+        from marketpilot.models.portfolio import (
+            PortfolioAdmissionDecision, PortfolioExposureSnapshot, EquitySnapshot, PortfolioAllocationToken
+        )
+        from decimal import Decimal
+
+        # Test the canonical presentation model renderer
+        test_candidate = FinalCandidate(
+            candidate_id="test_cand_1",
+            priced_candidate=PricedCandidate(
+                candidate_id="test_cand_1",
+                intent=SignalIntent(
+                    intent_id="test_int_1",
+                    identity=StrategyIdentity(
+                        strategy_id="TEST_STRAT",
+                        strategy_version="1.0",
+                        registry_version="1.0",
+                        parameter_set_id="default"
+                    ),
+                    symbol="BTCUSDT",
+                    timeframe=Interval.M5,
+                    direction=SignalDirection.LONG,
+                    signal_timestamp=0.0,
+                    signal_timestamp_us=0,
+                    logical_stop_loss=Decimal("49000"),
+                    logical_take_profit=Decimal("55000"),
+                    provenance_snapshot_id="test_prov"
+                ),
+                quote=ExecutableQuoteSnapshot(
+                    quote_id="test_q_1",
+                    environment="MAINNET", # Type is StrEnum, so "MAINNET" works
+                    quote_timestamp=0.0,
+                    symbol="BTCUSDT",
+                    bid=Decimal("50000"),
+                    ask=Decimal("50000")
+                ),
+                pricing_status=PricingStatus.PRICED,
+                executable_entry_price=Decimal("50000")
+            ),
+            assessment=EvidenceAssessment(
+                assessment_id="test_ass",
+                status=AssessmentStatus.VALIDATED,
+                approved_expected_gross_r=Decimal("1.5")
+            ),
+            pre_size_economics=PreSizeEconomics(
+                approved_expected_gross_r=Decimal("1.5"),
+                pre_size_expected_cost_r=Decimal("0.1"),
+                pre_size_net_ev_r=Decimal("1.4"),
+                cost_model_provenance="TEST"
+            ),
+            sizing=SizingDecision(
+                sizing_id="test_size",
+                provisional_quantity=Decimal("0.05"),
+                effective_stop_price=Decimal("49000"),
+                risk_policy_provenance="TEST"
+            ),
+            size_aware_economics=SizeAwareEconomics(
+                size_aware_cost_r=Decimal("0.1"),
+                final_net_ev_r=Decimal("1.4")
+            ),
+            is_eligible=True
+        )
+
+        test_decision = PortfolioAdmissionDecision(
+            decision_id="test_dec",
+            is_admitted=True,
+            token=PortfolioAllocationToken(
+                candidate_id="test_cand_1",
+                decision_id="test_dec",
+                strategy_id="TEST_STRAT",
+                strategy_version="1.0",
+                parameter_set_id="default",
+                symbol="BTCUSDT",
+                direction="LONG",
+                sizing_id="test_size",
+                effective_stop=Decimal("49000"),
+                quantity=Decimal("0.05"),
+                executable_entry=Decimal("50000"),
+                candidate_risk_amount=Decimal("50.0"),
+                final_net_ev=Decimal("1.4"),
+                portfolio_snapshot_version="v1",
+                equity_snapshot_version="v1",
+                portfolio_policy_version="v1",
+                reservation_identity="test_res",
+                lineage_identity="test_lin",
+                admission_timestamp=0.0
+            )
+        )
+
+        test_exposure = PortfolioExposureSnapshot(
+            exposure_version="v1",
+            timestamp=0.0,
+            active_position_ids=("pos_1",),
+            reserved_allocation_ids=(),
+            active_risk_amount=Decimal("150.0"),
+            reserved_risk_amount=Decimal("0.0"),
+            policy_limit_risk_amount=Decimal("1000.0"),
+            policy_max_lineages=5,
+
+        )
+
+        test_equity = EquitySnapshot(
+            snapshot_id="test_eq",
+            version="1.0",
+            captured_at=0.0,
+            environment="PAPER",
+            safe_account_fingerprint="test",
+            configured_allocated_capital=Decimal("10000.0"),
+            usable_account_value=Decimal("15000.0"),
+            effective_risk_capital=Decimal("10000.0"),
+            freshness_status="FRESH",
+            provenance="TEST"
+        )
+
+        test_message = format_phase5_admission(test_candidate, test_decision, test_exposure, test_equity)
+
+        await notifier.notify(NotificationEvent(
+            event_type=NotificationType.PAPER_TRADE,
+            message_data={"message": test_message}
+        ))
         print("  Done. (Any delivery failures were logged securely)")
         print()
     else:
@@ -1193,21 +1321,21 @@ async def _cmd_telegram(settings: object, args: list[str]) -> None:
 async def _cmd_migrate(settings: object, args: list[str]) -> None:
     """Execute the ``migrate`` command."""
     confirm = "--confirm" in args
-    
+
     if not confirm:
         print("Error: Migration requires --confirm flag to execute.")
         import sys
         sys.exit(1)
-        
+
     print()
     print("  [DATABASE MIGRATION]")
     print("  ---------------------------------------------------------------------------")
     print("  Connecting to database...")
-    
+
     from marketpilot.storage.database import DatabaseManager
     db = DatabaseManager(settings.storage) # type: ignore
     await db.initialize(create_tables=True)
-    
+
     try:
         await db.migrate_paper_trades()
         print("  [✓] Migration successful (or already applied).")
@@ -1217,7 +1345,7 @@ async def _cmd_migrate(settings: object, args: list[str]) -> None:
         sys.exit(1)
     finally:
         await db.close()
-        
+
     print("  ---------------------------------------------------------------------------")
     print()
 
@@ -1228,62 +1356,62 @@ async def _cmd_positions(settings: object, args: list[str]) -> None:
         print("Usage: uv run marketpilot positions {check, manage}")
         import sys
         sys.exit(1)
-        
+
     subcommand = args[0]
     confirm = "--confirm" in args
-    
+
     if subcommand == "manage" and not confirm:
         print("Error: positions manage requires --confirm flag to mutate local paper positions.")
         import sys
         sys.exit(1)
-        
+
     print()
     if subcommand == "manage":
         print("  [PAPER POSITION MANAGEMENT ONLY - NO REAL ORDER]")
     else:
         print("  [PAPER POSITION EVALUATION - READ ONLY]")
     print("  ---------------------------------------------------------------------------")
-    
+
     from marketpilot.storage.database import DatabaseManager
     from marketpilot.paper.service import PaperTradingService
     from marketpilot.exchange.bybit_client import BybitClient
     from marketpilot.positions.service import PositionManagerService
     from marketpilot.core.enums import AssetType
-    
+
     db = DatabaseManager(settings.storage) # type: ignore
     await db.initialize(create_tables=True)
-    
+
     migrated = await db.check_migration_status()
     if not migrated:
         print("  [ERR] Migration required. Please run: uv run marketpilot migrate --confirm")
         await db.close()
         import sys
         sys.exit(1)
-        
+
     paper = PaperTradingService(settings.paper) # type: ignore
     client = BybitClient(settings.exchange) # type: ignore
     manager = PositionManagerService()
-    
+
     await client.connect()
-    
+
     try:
         async with db.session() as session:
             snapshot = await paper.get_snapshot(session, {})
             positions = snapshot.positions
-            
+
         if not positions:
             print("  No open paper positions.")
         else:
             print(f"  Found {len(positions)} open position(s). Fetching public market prices...")
-            
+
             # Fetch prices
             tickers = await client.get_tickers(symbol="", asset_type=AssetType("linear"))
             prices = {t.symbol: t.last_price for t in tickers}
-            
+
             decisions = manager.evaluate_positions(positions, prices)
-            
+
             to_execute = []
-            
+
             for d in decisions:
                 if d.action.value == "HOLD":
                     color = "\033[90m" # Gray
@@ -1293,13 +1421,13 @@ async def _cmd_positions(settings: object, args: list[str]) -> None:
                     print(f"  {d.symbol:<10} | Price: {d.mark_price or 'N/A':<10} | Action: {d.action.value:<18} | Reason: {d.reason}")
                     if d.action.value in ("CLOSE_STOP_LOSS", "CLOSE_TAKE_PROFIT"):
                         to_execute.append(d)
-                        
+
             if subcommand == "manage" and to_execute:
                 print("\n  Executing actions...")
                 from marketpilot.core.factory import MissionControlFactory
                 from marketpilot.notifications.notification_models import NotificationEvent, NotificationType
                 notifier = TelegramNotifier(settings.telegram) # type: ignore
-                
+
                 for d in to_execute:
                     try:
                         async with db.session() as session:
@@ -1311,7 +1439,7 @@ async def _cmd_positions(settings: object, args: list[str]) -> None:
                                     exit_reason=d.reason
                                 )
                         print(f"  [✓] Closed {d.symbol} at {trade.exit_price}")
-                        
+
                         await notifier.notify(NotificationEvent(
                             event_type=NotificationType.EXECUTION_SUCCESS,
                             message_data={"message": f"📊 [PAPER ONLY] Position Closed\nSymbol: {trade.symbol}\nDirection: {trade.direction.value}\nExit: {trade.exit_price:.4f}\nPnL: {trade.realized_pnl:.4f}"}
@@ -1320,13 +1448,13 @@ async def _cmd_positions(settings: object, args: list[str]) -> None:
                         print(f"  [ERR] Failed to close {d.symbol}: {e}")
             elif subcommand == "manage":
                 print("\n  No actionable decisions found.")
-                
+
     except Exception as exc:
         print(f"  [ERR] Error during position management: {exc}")
     finally:
         await client.disconnect()
         await db.close()
-        
+
     print("  ---------------------------------------------------------------------------")
     print()
 
@@ -1339,37 +1467,37 @@ async def _cmd_research(settings: AppSettings, args: list[str]) -> None:
     from marketpilot.exchange.bybit_client import BybitClient
     from marketpilot.research.service import ResearchService
     from marketpilot.core.enums import AssetType, Interval
-    
+
     print()
     print("  [RESEARCH JOURNAL]")
     print("  ---------------------------------------------------------------------------")
 
     parser = argparse.ArgumentParser(prog="marketpilot research")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
-    
+
     # Capture
     parser_cap = subparsers.add_parser("capture")
     parser_cap.add_argument("symbol", type=str)
     parser_cap.add_argument("--interval", type=str, default="60")
     parser_cap.add_argument("--limit", type=int, default=250)
     parser_cap.add_argument("--equity", type=str, default="10000")
-    
+
     # Evaluate
     parser_eval = subparsers.add_parser("evaluate")
     parser_eval.add_argument("symbol", type=str)
     parser_eval.add_argument("--interval", type=str, default="60")
     parser_eval.add_argument("--limit", type=int, default=1000)
-    
+
     # Report
     subparsers.add_parser("report")
-    
+
     try:
         parsed = parser.parse_args(args)
     except SystemExit:
         return
-        
+
     service = ResearchService(settings)
-    
+
     if parsed.subcommand == "capture":
         symbol = parsed.symbol.upper()
         try:
@@ -1377,11 +1505,11 @@ async def _cmd_research(settings: AppSettings, args: list[str]) -> None:
         except ValueError:
             print(f"  Error: Invalid interval '{parsed.interval}'")
             return
-            
+
         print(f"  Capturing observation for {symbol} ({interval.value}m)")
         print("  WARNING: This is out-of-sample simulation only. No paper trades will be placed.")
         print()
-        
+
         client = BybitClient(settings.exchange)
         try:
             await client.connect()
@@ -1396,13 +1524,13 @@ async def _cmd_research(settings: AppSettings, args: list[str]) -> None:
             return
         finally:
             await client.disconnect()
-            
+
         # We need closed klines
         closed_klines = [k for k in klines if k.is_closed]
         if not closed_klines:
             print("  Error: No closed klines received.")
             return
-            
+
         equity = Decimal(parsed.equity)
         obs = service.capture(closed_klines, equity)
         if obs:
@@ -1412,7 +1540,7 @@ async def _cmd_research(settings: AppSettings, args: list[str]) -> None:
             print(f"      Signal Time: {obs.signal_time}")
         else:
             print("  [x] No eligible actionable signal captured.")
-            
+
     elif parsed.subcommand == "evaluate":
         symbol = parsed.symbol.upper()
         try:
@@ -1420,9 +1548,9 @@ async def _cmd_research(settings: AppSettings, args: list[str]) -> None:
         except ValueError:
             print(f"  Error: Invalid interval '{parsed.interval}'")
             return
-            
+
         print(f"  Evaluating open observations for {symbol} ({interval.value}m)")
-        
+
         client = BybitClient(settings.exchange)
         try:
             await client.connect()
@@ -1437,10 +1565,10 @@ async def _cmd_research(settings: AppSettings, args: list[str]) -> None:
             return
         finally:
             await client.disconnect()
-            
+
         resolved = service.evaluate(klines)
         print(f"  [✓] Evaluation complete. Resolved {resolved} observation(s).")
-        
+
     elif parsed.subcommand == "report":
         report = service.generate_report()
         print("  Research Report Statistics:")
@@ -1448,7 +1576,7 @@ async def _cmd_research(settings: AppSettings, args: list[str]) -> None:
         print(f"  Total Observations : {report.total_observations}")
         print(f"  Resolved Count     : {report.resolved_count}")
         print(f"  Open Count         : {report.open_count}")
-        
+
         if report.resolved_count > 0:
             print(f"  Win Rate           : {report.win_rate * Decimal('100'):.2f}%")
             print(f"  Average R          : {report.average_r:.2f}R")
@@ -1457,7 +1585,7 @@ async def _cmd_research(settings: AppSettings, args: list[str]) -> None:
             print(f"  Period             : {report.start_date} to {report.end_date}")
         else:
             print("  Metrics (Win Rate, Average R, Expectancy) : N/A (Insufficient resolved data)")
-            
+
         print()
         print("  ⚠️ IMPORTANT DISCLAIMER:")
         print("  These statistics are based on theoretical execution without slippage or fee")
@@ -1471,14 +1599,14 @@ async def _cmd_demo(settings: AppSettings, args: list[str]) -> None:
     from marketpilot.core.enums import AssetType, Interval, OrderSide
     from marketpilot.demo.service import DemoExecutionService
     from marketpilot.notifications.telegram_notifier import TelegramNotifier
-    
+
     print()
     print("  [BYBIT DEMO ONLY - NO REAL MONEY]")
     print("  ---------------------------------------------------------------------------")
 
     parser = argparse.ArgumentParser(prog="marketpilot demo")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
-    
+
     # Open
     parser_open = subparsers.add_parser("open")
     parser_open.add_argument("symbol", type=str)
@@ -1486,29 +1614,29 @@ async def _cmd_demo(settings: AppSettings, args: list[str]) -> None:
     parser_open.add_argument("--limit", type=int, default=250)
     parser_open.add_argument("--equity", type=str, default="10000")
     parser_open.add_argument("--confirm", action="store_true", help="Confirm execution")
-    
+
     # Close
     parser_close = subparsers.add_parser("close")
     parser_close.add_argument("symbol", type=str)
     parser_close.add_argument("--quantity", type=str, help="Quantity to close (default: entire position)")
     parser_close.add_argument("--confirm", action="store_true", help="Confirm execution")
-    
+
     # Autopilot
     parser_auto = subparsers.add_parser("autopilot")
     parser_auto.add_argument("action", type=str, choices=["run"])
     parser_auto.add_argument("--confirm", action="store_true", help="Confirm execution")
-    
+
     try:
         parsed = parser.parse_args(args)
     except SystemExit:
         return
-        
+
     if not parsed.confirm:
         print("  Error: You must pass --confirm to submit demo orders.")
         return
-        
+
     service = DemoExecutionService(settings)
-    
+
     if parsed.subcommand == "open":
         symbol = parsed.symbol.upper()
         try:
@@ -1516,7 +1644,7 @@ async def _cmd_demo(settings: AppSettings, args: list[str]) -> None:
         except ValueError:
             print(f"  Error: Invalid interval '{parsed.interval}'")
             return
-            
+
         print(f"  Fetching market data for {symbol} ({interval.value}m)...")
         client = BybitClient(settings.exchange) # We fetch public data using default exchange client
         try:
@@ -1532,15 +1660,15 @@ async def _cmd_demo(settings: AppSettings, args: list[str]) -> None:
             return
         finally:
             await client.disconnect()
-            
+
         closed_klines = [k for k in klines if k.is_closed]
         if not closed_klines:
             print("  Error: No closed klines received.")
             return
-            
+
         print("  Evaluating Strategy & Risk...")
         record = await service.execute_open(symbol, interval.value, Decimal(parsed.equity), closed_klines)
-        
+
         if record:
             print(f"  [✓] Execution Attempted. Status: {record.status.value}")
             print(f"      Order Link ID: {record.order_link_id}")
@@ -1549,15 +1677,15 @@ async def _cmd_demo(settings: AppSettings, args: list[str]) -> None:
                 print(f"      Avg Price    : {record.avg_fill_price}")
         else:
             print("  [x] Execution aborted. Signal/Risk not eligible, or execution disabled.")
-            
+
     elif parsed.subcommand == "close":
         symbol = parsed.symbol.upper()
         quantity = Decimal(parsed.quantity) if parsed.quantity else None
-        
+
         qty_str = f"{quantity}" if quantity else "ALL"
         print(f"  Attempting to close {qty_str} of {symbol} position...")
         record = await service.execute_close(symbol, quantity)
-        
+
         if record:
             print(f"  [✓] Execution Attempted. Status: {record.status.value}")
             print(f"      Order Link ID: {record.order_link_id}")
@@ -1566,14 +1694,14 @@ async def _cmd_demo(settings: AppSettings, args: list[str]) -> None:
                 print(f"      Avg Price    : {record.avg_fill_price}")
         else:
             print("  [x] Execution aborted or disabled.")
-            
+
     elif parsed.subcommand == "autopilot":
         if parsed.action == "run":
             from marketpilot.autopilot.service import AutopilotService
             auto_service = AutopilotService(settings)
             print("  Running Autopilot cycle...")
             decision = await auto_service.run_cycle()
-            
+
             if decision:
                 print(f"  [✓] Autopilot completed. Candidate: {decision.symbol}")
                 print(f"      Score        : {decision.score}")
@@ -1610,15 +1738,15 @@ def _cmd_daemon(settings: object, args: list[str]) -> None:
     print('Starting MissionControlDaemon...')
     from marketpilot.core.factory import MissionControlFactory
     from marketpilot.daemon.service import MissionControlDaemon
-    
+
     # 1. Build runtime
     ctx = MissionControlFactory.build_runtime(settings)
-    
+
     # 2. Create daemon
     daemon = MissionControlDaemon()
-    
+
     is_once = "--once" in args
-    
+
     if is_once:
         asyncio.run(daemon.run_one_cycle())
     else:
@@ -1626,16 +1754,16 @@ def _cmd_daemon(settings: object, args: list[str]) -> None:
         print('Acquiring single-writer lock...')
         daemon._acquire_single_writer_lock()
         print('Single-writer lock acquired successfully.')
-        
+
         print('Hydrating Journal Engine...')
         print('Journal Engine status: Ready.')
-        
+
         print('Hydrating Exposure Manager...')
         if daemon.exposure:
             print('Exposure Manager status: Hydrated.')
         else:
             print('Exposure Manager status: Not available.')
-        
+
         print('Runtime mutation capability = READ_ONLY')
         print('Evaluation architecture = PHASE_4_CAUSAL')
         print('Orders submitted: 0')
