@@ -19,8 +19,14 @@ from marketpilot.strategy.pricing_policy import PricingPolicy
 from marketpilot.strategy.validation_policy import ValidationPolicy
 from marketpilot.strategy.economics import CausalEconomicsEngine
 from marketpilot.exchange.bybit_client import BybitClient
-from marketpilot.models.causal import ExecutableQuoteSnapshot, SignalIntent, StrategyIdentity, SignalDirection
+from marketpilot.models.causal import (
+    ExecutableQuoteSnapshot,
+    SignalIntent,
+    StrategyIdentity,
+    SignalDirection,
+)
 from marketpilot.dashboard.store import DashboardProjection
+
 
 async def main():
     logger.info("Starting Phase 4 Smoke Verification...")
@@ -28,7 +34,7 @@ async def main():
     # 1. Market Data Environment
     settings = AppSettings()
     env = settings.exchange.environment
-    mode = ExecutionMode.PAPER # Force to paper for smoke test
+    mode = ExecutionMode.PAPER  # Force to paper for smoke test
     logger.info(f"Environment: {env.value}")
     logger.info(f"Execution Mode: {mode.value}")
 
@@ -36,7 +42,9 @@ async def main():
     assert mode.value == "PAPER", "Smoke test requires PAPER execution mode"
 
     # Ensure NO execution authority
-    client = BybitClient(exchange_settings=settings.exchange, execution_mode=settings.execution_mode)
+    client = BybitClient(
+        exchange_settings=settings.exchange, execution_mode=settings.execution_mode
+    )
     await client.connect()
 
     server_time_sec = 0.0
@@ -47,7 +55,9 @@ async def main():
         logger.info(f"Fetching real market data for {symbol}...")
 
         server_time_sec = (await client.get_server_time()).timestamp()
-        klines = await client.get_klines(symbol, Interval.H1, limit=200, asset_type=AssetType.LINEAR)
+        klines = await client.get_klines(
+            symbol, Interval.H1, limit=200, asset_type=AssetType.LINEAR
+        )
         tickers = await client.get_tickers(symbol, asset_type=AssetType.LINEAR)
     finally:
         await client.disconnect()
@@ -57,23 +67,28 @@ async def main():
         return
 
     from marketpilot.models.market_data import RawMarketData
+
     raw = RawMarketData(
         symbol=symbol,
         asset_type=AssetType.LINEAR,
         ticker=tickers[0],
         klines=klines,
-        timestamp=time.time()
+        timestamp=time.time(),
     )
 
     # 3. Construct ClosedInstrumentSnapshot
     builder = InstrumentSnapshotBuilder(IndicatorEngine(settings.indicators))
 
-    clock = MarketObservationClock(observed_at=server_time_sec, time_source="BYBIT_SERVER_TIME", provenance="MAINNET_REST")
+    clock = MarketObservationClock(
+        observed_at=server_time_sec, time_source="BYBIT_SERVER_TIME", provenance="MAINNET_REST"
+    )
 
     result = builder.build_causal(raw, clock)
 
     if result.snapshot is None:
-        logger.warning(f"No causal snapshot could be built. Outcome: {result.outcome.value}, Reason: {result.reason}")
+        logger.warning(
+            f"No causal snapshot could be built. Outcome: {result.outcome.value}, Reason: {result.reason}"
+        )
         return
 
     snapshot = result.snapshot
@@ -86,7 +101,7 @@ async def main():
         registry_version="1.0",
         strategy_id="test_smoke_strategy",
         strategy_version="1.0",
-        parameter_set_id="default"
+        parameter_set_id="default",
     )
 
     signal_ts = time.time()
@@ -99,7 +114,7 @@ async def main():
         signal_timestamp_us=int(Decimal(str(signal_ts)) * 1_000_000),
         logical_stop_loss=snapshot.facts.close * Decimal("0.95"),
         logical_take_profit=snapshot.facts.close * Decimal("1.10"),
-        provenance_snapshot_id=snapshot.snapshot_id
+        provenance_snapshot_id=snapshot.snapshot_id,
     )
 
     # 5. Acquire Canonical live/read-only quote data (Strictly AFTER intent)
@@ -122,23 +137,32 @@ async def main():
         quote_id=f"quote_{int(time.time())}",
         symbol=symbol,
         environment=env,
-        quote_timestamp=time.time(), # Now genuinely causal
+        quote_timestamp=time.time(),  # Now genuinely causal
         bid=bid,
-        ask=ask
+        ask=ask,
     )
 
     logger.info(f"Quote acquired at {quote.quote_timestamp}: Bid {bid}, Ask {ask}")
 
     pipeline = CausalPipeline(
         pricing=PricingPolicy(),
-        validation=ValidationPolicy([]), # NO fabricated evidence
-        economics=CausalEconomicsEngine(account_equity=Decimal("1000"))
+        validation=ValidationPolicy([]),  # NO fabricated evidence
+        economics=CausalEconomicsEngine(),
     )
 
     quotes = {identity.strategy_id: quote}
 
     # 6. Evaluate
-    result = pipeline.process_signals([intent], quotes, "trend_smoke", "BULL", "ALL")
+    result = pipeline.process_signals(
+        intents=[intent],
+        quotes=quotes,
+        regime_model="trend_smoke",
+        regime_state="BULL",
+        market_scope="ALL",
+        effective_risk_capital=Decimal("1000"),
+        risk_fraction=Decimal("0.005"),
+        max_risk_fraction=Decimal("0.01"),
+    )
 
     logger.info(f"Pipeline processed {len([intent])} intents.")
     logger.info(f"Result Candidates: {len(result.candidates)}")
@@ -147,6 +171,7 @@ async def main():
     # Check rejection
     for obs in result.observations:
         from marketpilot.models.causal import CandidateRejectedObserved
+
         if isinstance(obs, CandidateRejectedObserved):
             logger.info(f"Rejection Observed: {obs.rejection_reason}")
 
@@ -155,6 +180,7 @@ async def main():
     logger.info("Market Intelligence Projection successful.")
 
     logger.info(f"TOTAL ORDERS SUBMITTED: 0")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

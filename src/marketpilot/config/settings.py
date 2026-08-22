@@ -189,14 +189,39 @@ class RiskSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="RISK_", env_file=".env", extra="ignore")
 
-    risk_per_trade_fraction: Decimal = Field(default=Decimal("0.01"), description="Fraction of account equity to risk per trade")
-    atr_stop_multiplier: Decimal = Field(default=Decimal("1.5"), description="Multiplier for ATR to calculate stop distance")
-    minimum_reward_risk: Decimal = Field(default=Decimal("2.0"), description="Minimum reward to risk ratio")
-    maximum_atr_fraction: Decimal = Field(default=Decimal("0.05"), description="Maximum allowed volatility (ATR / Entry Price)")
+    risk_per_trade_fraction: Decimal = Field(
+        default=Decimal("0.005"), description="Fraction of account equity to risk per trade"
+    )
+    max_risk_per_trade_fraction: Decimal = Field(
+        default=Decimal("0.01"), description="Hard policy ceiling for risk per trade"
+    )
+    atr_stop_multiplier: Decimal = Field(
+        default=Decimal("1.5"), description="Multiplier for ATR to calculate stop distance"
+    )
+    minimum_reward_risk: Decimal = Field(
+        default=Decimal("2.0"), description="Minimum reward to risk ratio"
+    )
+    maximum_atr_fraction: Decimal = Field(
+        default=Decimal("0.05"), description="Maximum allowed volatility (ATR / Entry Price)"
+    )
 
     def model_post_init(self, __context: object) -> None:
-        if not self.risk_per_trade_fraction.is_finite() or self.risk_per_trade_fraction <= 0 or self.risk_per_trade_fraction > Decimal("1"):
+        if (
+            not self.risk_per_trade_fraction.is_finite()
+            or self.risk_per_trade_fraction <= 0
+            or self.risk_per_trade_fraction > Decimal("1")
+        ):
             raise ValueError("risk_per_trade_fraction must be a finite positive decimal <= 1")
+        if (
+            not self.max_risk_per_trade_fraction.is_finite()
+            or self.max_risk_per_trade_fraction <= 0
+            or self.max_risk_per_trade_fraction > Decimal("1")
+        ):
+            raise ValueError("max_risk_per_trade_fraction must be a finite positive decimal <= 1")
+        if self.risk_per_trade_fraction > self.max_risk_per_trade_fraction:
+            raise ValueError(
+                f"risk_per_trade_fraction ({self.risk_per_trade_fraction}) exceeds hard ceiling ({self.max_risk_per_trade_fraction})"
+            )
         if not self.atr_stop_multiplier.is_finite() or self.atr_stop_multiplier <= 0:
             raise ValueError("atr_stop_multiplier must be a finite positive decimal")
         if not self.minimum_reward_risk.is_finite() or self.minimum_reward_risk <= 0:
@@ -309,6 +334,10 @@ class PortfolioSettings(BaseSettings):
     allocated_capital: Optional[Decimal] = Field(
         default=None,
         description="Explicitly allocated risk capital for MarketPilot."
+    )
+    minimum_unallocated_buffer: Decimal = Field(
+        default=Decimal("3.0"),
+        description="Minimum cash buffer that must remain unallocated in the account."
     )
     max_total_heat_ratio: Decimal = Field(
         default=Decimal("0.10"),

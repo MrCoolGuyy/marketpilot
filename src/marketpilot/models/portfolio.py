@@ -8,21 +8,31 @@ from decimal import Decimal
 from typing import Tuple, Optional
 from pydantic import BaseModel, Field
 
+
 class PortfolioSnapshot(BaseModel, frozen=True):
     """Snapshot of the account portfolio at a specific point in time."""
+
     timestamp: float
 
     equity: Decimal = Field(..., description="Total account equity")
     balance: Decimal = Field(..., description="Wallet balance")
     margin_used: Decimal = Field(..., description="Total margin used by open positions")
 
-    drawdown_percent: Decimal = Field(default=Decimal("0"), description="Current drawdown from peak")
-    exposure_percent: Decimal = Field(default=Decimal("0"), description="Percentage of equity currently at risk")
+    drawdown_percent: Decimal = Field(
+        default=Decimal("0"), description="Current drawdown from peak"
+    )
+    exposure_percent: Decimal = Field(
+        default=Decimal("0"), description="Percentage of equity currently at risk"
+    )
 
-    open_risk: Decimal = Field(default=Decimal("0"), description="Total dollar amount at risk across all stops")
+    open_risk: Decimal = Field(
+        default=Decimal("0"), description="Total dollar amount at risk across all stops"
+    )
+
 
 class EquitySnapshot(BaseModel):
     """Immutable batch snapshot of account equity."""
+
     model_config = {"frozen": True}
     snapshot_id: str
     version: str
@@ -35,8 +45,10 @@ class EquitySnapshot(BaseModel):
     freshness_status: str
     provenance: str
 
+
 class PortfolioExposureSnapshot(BaseModel):
     """Immutable snapshot of the exposure manager's state."""
+
     model_config = {"frozen": True}
     exposure_version: str
     timestamp: float
@@ -54,8 +66,10 @@ class PortfolioExposureSnapshot(BaseModel):
         """Derived invariant: total_risk_amount = active + reserved"""
         return self.active_risk_amount + self.reserved_risk_amount
 
+
 class PortfolioAllocationToken(BaseModel):
     """Immutable allocator-approved trade intent and provenance."""
+
     model_config = {"frozen": True}
 
     candidate_id: str
@@ -82,15 +96,19 @@ class PortfolioAllocationToken(BaseModel):
     lineage_identity: str
     admission_timestamp: float
 
+
 class AllocationRejection(BaseModel):
     """Typed rejection reason for portfolio allocation failure."""
+
     model_config = {"frozen": True}
     decision_id: str
     rejection_code: str
     reason: str
 
+
 class PortfolioAdmissionDecision(BaseModel):
     """Envelope returning either Admitted (with Token) or Rejected."""
+
     model_config = {"frozen": True}
     decision_id: str
     is_admitted: bool

@@ -131,6 +131,7 @@ async def test_mission_control_lifecycle():
     ctx.settings.portfolio.max_simultaneous_lineages = 10
     ctx.settings.portfolio.max_total_heat_ratio = Decimal("0.20")
     ctx.settings.portfolio.allocated_capital = Decimal("20000")
+    ctx.settings.portfolio.minimum_unallocated_buffer = Decimal("3.0")
 
     fetcher = MagicMock()
     from marketpilot.models.market_data import RawMarketData, AssetType, Ticker

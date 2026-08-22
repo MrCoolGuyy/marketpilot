@@ -50,12 +50,27 @@ class CausalEconomicsEngine:
             cost_model_provenance="v1.0-linear"
         )
 
-    def provisional_size(self, candidate: PricedCandidate) -> SizingDecision:
+    def provisional_size(
+        self,
+        candidate: PricedCandidate,
+        effective_risk_capital: Decimal,
+        risk_fraction: Decimal,
+        max_risk_fraction: Decimal,
+    ) -> SizingDecision:
         """Determines provisional quantity before checking liquidity impact."""
         intent = candidate.intent
 
+        # Check Policy Ceiling
+        if risk_fraction > max_risk_fraction:
+            return SizingDecision(
+                sizing_id=str(uuid.uuid4()),
+                provisional_quantity=Decimal("0"),
+                effective_stop_price=intent.logical_stop_loss,
+                risk_policy_provenance="RISK_POLICY_CEILING_EXCEEDED",
+            )
+
         # Risk amount in quote
-        risk_amount = self.account_equity * self.risk_fraction
+        risk_amount = effective_risk_capital * risk_fraction
 
         entry = candidate.executable_entry_price
         sl = intent.logical_stop_loss

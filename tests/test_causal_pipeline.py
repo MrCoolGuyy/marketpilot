@@ -79,7 +79,9 @@ def test_causal_pipeline_full_acceptance():
         economics=CausalEconomicsEngine(account_equity=Decimal("1000"))
     )
 
-    result = pipeline.process_signals([intent], {"strat_1": quote}, "trend_v1", "BULL", "ALL")
+    result = pipeline.process_signals(
+        [intent], {"strat_1": quote}, "trend_v1", "BULL", "ALL", Decimal("10000"), Decimal("0.005"), Decimal("0.01")
+    )
 
     assert len(result.candidates) == 1
     assert len(result.observations) == 2 # 1 eval, 1 cf

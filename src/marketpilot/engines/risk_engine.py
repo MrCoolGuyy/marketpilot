@@ -1,4 +1,4 @@
-﻿"""
+"""
 MarketPilot Engines � Risk Engine.
 
 Evaluates StrategyEvaluations against risk constraints.
@@ -15,6 +15,7 @@ from marketpilot.models.risk import RiskDecision
 from marketpilot.models.strategy import StrategyEvaluation
 from marketpilot.models.core import EngineMetadata
 
+
 class RiskEngine:
     """Evaluates strategy proposals against risk parameters to produce a RiskDecision."""
 
@@ -22,18 +23,20 @@ class RiskEngine:
         self._settings = settings
 
     def evaluate(
-        self, 
-        eval_result: StrategyEvaluation, 
+        self,
+        eval_result: StrategyEvaluation,
         market_health: Decimal,
-        account_equity: Decimal,
-        decision_id: str
+        effective_risk_capital: Decimal,
+        decision_id: str,
     ) -> tuple[RiskDecision, EngineMetadata]:
         """Produce a RiskDecision for the given StrategyEvaluation."""
         start_time = time.time()
-        
+
         def meta() -> EngineMetadata:
-            return EngineMetadata(processing_time_ms=(time.time() - start_time) * 1000, decision_id=decision_id)
-        
+            return EngineMetadata(
+                processing_time_ms=(time.time() - start_time) * 1000, decision_id=decision_id
+            )
+
         # Rule: Market Health < 40 -> NO NEW POSITION
         if market_health < Decimal("40"):
             return RiskDecision(
@@ -43,7 +46,19 @@ class RiskEngine:
                 risk_amount=Decimal("0"),
                 sl=Decimal("0"),
                 tp=Decimal("0"),
-                rr=Decimal("0")
+                rr=Decimal("0"),
+            ), meta()
+
+        # Rule: Canonical TP required
+        if not eval_result.take_profit or eval_result.take_profit <= Decimal("0"):
+            return RiskDecision(
+                approved=False,
+                reason="Rejected: Canonical take-profit required for v1 execution.",
+                position_size=Decimal("0"),
+                risk_amount=Decimal("0"),
+                sl=eval_result.stop_loss,
+                tp=eval_result.take_profit,
+                rr=eval_result.expected_rr,
             ), meta()
 
         # Rule: Minimum RR
@@ -55,16 +70,28 @@ class RiskEngine:
                 risk_amount=Decimal("0"),
                 sl=eval_result.stop_loss,
                 tp=eval_result.take_profit,
-                rr=eval_result.expected_rr
+                rr=eval_result.expected_rr,
+            ), meta()
+
+        # Check Policy Ceiling
+        if self._settings.risk_per_trade_fraction > self._settings.max_risk_per_trade_fraction:
+            return RiskDecision(
+                approved=False,
+                reason="Rejected: RISK_POLICY_CEILING_EXCEEDED. Requested risk exceeds hard policy ceiling.",
+                position_size=Decimal("0"),
+                risk_amount=Decimal("0"),
+                sl=eval_result.stop_loss,
+                tp=eval_result.take_profit,
+                rr=eval_result.expected_rr,
             ), meta()
 
         # Calculate Risk Amount (Quote Coin)
-        risk_amount = account_equity * self._settings.risk_per_trade_fraction
-        
+        risk_amount = effective_risk_capital * self._settings.risk_per_trade_fraction
+
         # Calculate Position Size (Base Coin)
         # Risk per unit = abs(Entry - SL)
         risk_per_unit = (eval_result.entry_price - eval_result.stop_loss).copy_abs()
-        
+
         if risk_per_unit == Decimal("0"):
             return RiskDecision(
                 approved=False,
@@ -73,20 +100,20 @@ class RiskEngine:
                 risk_amount=Decimal("0"),
                 sl=eval_result.stop_loss,
                 tp=eval_result.take_profit,
-                rr=eval_result.expected_rr
+                rr=eval_result.expected_rr,
             ), meta()
-            
+
         # Volatility check
         volatility = risk_per_unit / eval_result.entry_price
         if volatility > self._settings.maximum_atr_fraction:
             return RiskDecision(
                 approved=False,
-                reason=f"Rejected: Volatility/SL Distance ({volatility*100:.2f}%) exceeds maximum allowed ({self._settings.maximum_atr_fraction*100:.2f}%).",
+                reason=f"Rejected: Volatility/SL Distance ({volatility * 100:.2f}%) exceeds maximum allowed ({self._settings.maximum_atr_fraction * 100:.2f}%).",
                 position_size=Decimal("0"),
                 risk_amount=Decimal("0"),
                 sl=eval_result.stop_loss,
                 tp=eval_result.take_profit,
-                rr=eval_result.expected_rr
+                rr=eval_result.expected_rr,
             ), meta()
 
         position_size = risk_amount / risk_per_unit
@@ -94,9 +121,9 @@ class RiskEngine:
         return RiskDecision(
             approved=True,
             reason="Approved: Passed all risk checks.",
-            position_size=position_size.quantize(Decimal("0.0001")), # Simplistic rounding
+            position_size=position_size.quantize(Decimal("0.0001")),  # Simplistic rounding
             risk_amount=risk_amount.quantize(Decimal("0.01")),
             sl=eval_result.stop_loss,
             tp=eval_result.take_profit,
-            rr=eval_result.expected_rr
+            rr=eval_result.expected_rr,
         ), meta()

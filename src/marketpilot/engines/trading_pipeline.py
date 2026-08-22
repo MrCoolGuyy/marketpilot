@@ -14,10 +14,7 @@ from loguru import logger
 if TYPE_CHECKING:
     from marketpilot.core.factory import RuntimeContext
 
-from marketpilot.models.events import (
-    CycleStartedEvent,
-    CycleFinishedEvent
-)
+from marketpilot.models.events import CycleStartedEvent, CycleFinishedEvent
 
 from marketpilot.core.time import MarketObservationClock
 from marketpilot.core.enums import AssetType
@@ -39,7 +36,7 @@ MAX_CAS_RETRIES: Final = 3
 class TradingPipeline:
     """Orchestrates Phase-4 Causal evaluation and publishes observations."""
 
-    def __init__(self, ctx: 'RuntimeContext'):
+    def __init__(self, ctx: "RuntimeContext"):
         self.ctx = ctx
         self.bus = ctx.bus
         self.metrics = ctx.metrics
@@ -55,12 +52,14 @@ class TradingPipeline:
         self.causal_pipeline = CausalPipeline(
             pricing=PricingPolicy(),
             validation=ValidationPolicy([]),
-            economics=CausalEconomicsEngine(account_equity=Decimal("1000"))
+            economics=CausalEconomicsEngine(),
         )
         self.portfolio_policy = PortfolioPolicy(
             policy_version="V1-PHASE5",
+            allocated_capital=self.ctx.settings.portfolio.allocated_capital,
+            minimum_unallocated_buffer=self.ctx.settings.portfolio.minimum_unallocated_buffer,
             max_total_heat_ratio=self.ctx.settings.portfolio.max_total_heat_ratio,
-            max_simultaneous_lineages=self.ctx.settings.portfolio.max_simultaneous_lineages
+            max_simultaneous_lineages=self.ctx.settings.portfolio.max_simultaneous_lineages,
         )
         self.allocation_committer = AllocationCommitter()
 
@@ -81,9 +80,7 @@ class TradingPipeline:
             min_turnover = self.ctx.settings.scanner.min_turnover_24h
 
             raw_candidates = await self.market_data_fetcher.fetch_scan_candidates(
-                quote_coin=quote_coin,
-                min_turnover_24h=min_turnover,
-                limit=limit
+                quote_coin=quote_coin, min_turnover_24h=min_turnover, limit=limit
             )
 
             # 2. Build ClosedInstrumentSnapshots & Evaluate Strategy
@@ -95,7 +92,7 @@ class TradingPipeline:
                 clock = MarketObservationClock(
                     observed_at=raw.timestamp,
                     time_source="BYBIT_SERVER_TIME",
-                    provenance="MAINNET_REST"
+                    provenance="MAINNET_REST",
                 )
                 raw_snaps.append(self.snapshot_builder.build(raw))
 
@@ -109,7 +106,7 @@ class TradingPipeline:
                 clock = MarketObservationClock(
                     observed_at=raw.timestamp,
                     time_source="BYBIT_SERVER_TIME",
-                    provenance="MAINNET_REST"
+                    provenance="MAINNET_REST",
                 )
                 result = self.snapshot_builder.build_causal(raw, clock)
                 if result.snapshot:
@@ -123,7 +120,9 @@ class TradingPipeline:
                     series = self.ctx.indicator.calculate(raw.klines)
                     regime = MarketRegime.RANGING
 
-                    strategy_intents, _ = self.strategy.evaluate(series, regime, snapshot, event.ctx.decision_id)
+                    strategy_intents, _ = self.strategy.evaluate(
+                        series, regime, snapshot, event.ctx.decision_id
+                    )
                     intents.extend(strategy_intents)
 
             # 3. Genuinely acquire ExecutableQuoteSnapshots AFTER intents are finalized
@@ -131,9 +130,18 @@ class TradingPipeline:
             if intents:
                 logger.info("Fetching real-time executable quotes for generated intents...")
                 for intent in intents:
-                    snap = next((s for s in valid_snapshots if s.snapshot_id == intent.provenance_snapshot_id), None)
+                    snap = next(
+                        (
+                            s
+                            for s in valid_snapshots
+                            if s.snapshot_id == intent.provenance_snapshot_id
+                        ),
+                        None,
+                    )
                     if snap:
-                        live_tickers = await self.client.get_tickers(snap.symbol, asset_type=AssetType.LINEAR)
+                        live_tickers = await self.client.get_tickers(
+                            snap.symbol, asset_type=AssetType.LINEAR
+                        )
                         if live_tickers:
                             bid = Decimal(live_tickers[0].bid_price)
                             ask = Decimal(live_tickers[0].ask_price)
@@ -141,41 +149,97 @@ class TradingPipeline:
                                 quote_id=f"quote_{int(time.time())}",
                                 symbol=snap.symbol,
                                 environment=snap.environment,
-                                quote_timestamp=time.time(), # Genuinely causal
+                                quote_timestamp=time.time(),  # Genuinely causal
                                 bid=bid,
-                                ask=ask
+                                ask=ask,
                             )
                             quotes[intent.identity.strategy_id] = quote
 
+            # 3.5 Fetch Authoritative Equity for Sizing (Mandate requires effective_risk_capital)
+            allocated_cap = self.ctx.settings.portfolio.allocated_capital
+            try:
+                bal_resp = await self.client.get_wallet_balance(account_type="UNIFIED")
+                list_data = bal_resp.get("result", {}).get("list", [])
+                raw_eq = "0"
+                raw_avail = "0"
+                if list_data:
+                    coins = list_data[0].get("coin", [])
+                    for coin_data in coins:
+                        if coin_data.get("coin") == "USDT":
+                            raw_eq = coin_data.get("equity", "0")
+                            raw_avail = coin_data.get("availableToWithdraw", "0")
+                            break
+                    if raw_eq == "0" and raw_avail == "0":
+                        raw_eq = list_data[0].get("totalEquity", "0")
+                        raw_avail = list_data[0].get("totalAvailableBalance", "0")
+            except Exception as e:
+                logger.warning(f"Failed to fetch equity. Failing closed: {e}")
+                raw_eq = "0"
+                raw_avail = "0"
+
+            usable_account_value = Decimal(str(raw_avail))
+            effective_risk_capital = self.portfolio_policy.calculate_effective_risk_capital(usable_account_value)
+            if effective_risk_capital == Decimal("0") and self.portfolio_policy.allocated_capital is None:
+                logger.warning("Phase 5 disabled: allocated_capital is missing. Failing closed.")
+
+            equity_snapshot = EquitySnapshot(
+                snapshot_id=f"eq_{int(time.time() * 1000)}",
+                version="1.0",
+                captured_at=time.time(),
+                environment=self.ctx.settings.execution_mode.value,
+                safe_account_fingerprint="bybit_uta",
+                configured_allocated_capital=allocated_cap,
+                usable_account_value=usable_account_value,
+                effective_risk_capital=effective_risk_capital,
+                freshness_status="FRESH",
+                provenance="bybit_get_wallet_balance",
+            )
+
             # 4. Process through CausalPipeline
-            logger.info(f"Cycle {event.ctx.cycle_id}: CausalPipeline processing {len(intents)} intents.")
+            logger.info(
+                f"Cycle {event.ctx.cycle_id}: CausalPipeline processing {len(intents)} intents."
+            )
             batch_result = self.causal_pipeline.process_signals(
                 intents=intents,
                 quotes=quotes,
                 regime_model="trend_smoke",
                 regime_state="BULL",
-                market_scope="ALL"
+                market_scope="ALL",
+                effective_risk_capital=effective_risk_capital,
+                risk_fraction=self.ctx.settings.risk.risk_per_trade_fraction,
+                max_risk_fraction=self.ctx.settings.risk.max_risk_per_trade_fraction,
             )
 
             # 5. Stop. (No Phase-5 execution)
-            logger.info(f"Cycle {event.ctx.cycle_id}: Phase-4 boundary reached. Candidates: {len(batch_result.candidates)}")
+            logger.info(
+                f"Cycle {event.ctx.cycle_id}: Phase-4 boundary reached. Candidates: {len(batch_result.candidates)}"
+            )
 
             # 6. Publish Observations to Dashboard Read Store via durable FileProjectionRepository
             from marketpilot.dashboard.projections import FileProjectionRepository
             from marketpilot.dashboard.store import DashboardProjection
+
             repo = FileProjectionRepository()
-            intelligence = [DashboardProjection.project_market_intelligence(s) for s in valid_snapshots]
+            intelligence = [
+                DashboardProjection.project_market_intelligence(s) for s in valid_snapshots
+            ]
             evidence = []
 
             for rank, candidate in enumerate(batch_result.candidates, 1):
                 evidence.append(DashboardProjection.project_candidate(candidate, rank))
 
             from marketpilot.models.causal import CandidateRejectedObserved
+
             for obs in batch_result.observations:
                 if isinstance(obs, CandidateRejectedObserved):
                     evidence.append(DashboardProjection.project_rejection(obs))
-                    if obs.pricing_status.value == "PRICED" and obs.evidence_status.value in ("NO_EVIDENCE", "INSUFFICIENT", "STALE"):
+                    if obs.pricing_status.value == "PRICED" and obs.evidence_status.value in (
+                        "NO_EVIDENCE",
+                        "INSUFFICIENT",
+                        "STALE",
+                    ):
                         import asyncio
+
                         asyncio.create_task(self.notification_policy.notify_evidence_rejection(obs))
 
             # -----------------------------------------------------------------
@@ -185,57 +249,6 @@ class TradingPipeline:
             admitted_candidates = []
 
             if batch_result.candidates:
-                # 1. Fetch Authoritative Equity
-                allocated_cap = self.ctx.settings.portfolio.allocated_capital
-
-                if allocated_cap is not None:
-                    raw_eq = str(allocated_cap)
-                    raw_avail = str(allocated_cap)
-                else:
-                    try:
-                        bal_resp = await self.client.get_wallet_balance(account_type="UNIFIED")
-                        list_data = bal_resp.get("result", {}).get("list", [])
-
-                        raw_eq = "0"
-                        raw_avail = "0"
-                        if list_data:
-                            # Unified Trading Account - USDT coin balance
-                            coins = list_data[0].get("coin", [])
-                            for coin_data in coins:
-                                if coin_data.get("coin") == "USDT":
-                                    raw_eq = coin_data.get("equity", "0")
-                                    raw_avail = coin_data.get("availableToWithdraw", "0")
-                                    break
-
-                            # Fallback to total account equity if USDT is empty
-                            if raw_eq == "0" and raw_avail == "0":
-                                raw_eq = list_data[0].get("totalEquity", "0")
-                                raw_avail = list_data[0].get("totalAvailableBalance", "0")
-
-                    except Exception as e:
-                        logger.warning(f"Failed to fetch equity for Phase 5. Failing closed: {e}")
-                        raw_eq = "0"
-                        raw_avail = "0"
-
-                usable_account_value = Decimal(str(raw_avail))
-                effective_risk_capital = min(allocated_cap, usable_account_value) if allocated_cap is not None else Decimal("0")
-
-                equity_snapshot = EquitySnapshot(
-                    snapshot_id=f"eq_{int(time.time() * 1000)}",
-                    version="1.0",
-                    captured_at=time.time(),
-                    environment=self.ctx.settings.execution_mode.value,
-                    safe_account_fingerprint="bybit_uta",
-                    configured_allocated_capital=allocated_cap,
-                    usable_account_value=usable_account_value,
-                    effective_risk_capital=effective_risk_capital,
-                    freshness_status="FRESH",
-                    provenance="bybit_get_wallet_balance"
-                )
-
-                if allocated_cap is None:
-                    logger.warning("Phase 5 disabled: allocated_capital is missing. Failing closed.")
-
                 portfolio_rejections_heat = 0
                 portfolio_rejections_lineage = 0
 
@@ -249,22 +262,28 @@ class TradingPipeline:
                             candidate=candidate,
                             exposure_snapshot=exposure_snapshot,
                             equity_snapshot=equity_snapshot,
-                            policy=self.portfolio_policy
+                            policy=self.portfolio_policy,
                         )
 
                         if decision.is_rejected:
-                            logger.info(f"Phase 5 REJECTED {candidate.candidate_id}: {decision.rejection.reason}")
+                            logger.info(
+                                f"Phase 5 REJECTED {candidate.candidate_id}: {decision.rejection.reason}"
+                            )
                             if decision.rejection.rejection_code == "HEAT_EXCEEDED":
                                 portfolio_rejections_heat += 1
-                            elif decision.rejection.rejection_code in ("LINEAGE_EXISTS", "LINEAGE_LIMIT_EXCEEDED"):
+                            elif decision.rejection.rejection_code in (
+                                "LINEAGE_EXISTS",
+                                "LINEAGE_LIMIT_EXCEEDED",
+                            ):
                                 portfolio_rejections_lineage += 1
 
                             import asyncio
+
                             asyncio.create_task(
                                 self.notification_policy.notify_portfolio_rejection(
                                     candidate=candidate,
                                     decision=decision,
-                                    exposure=exposure_snapshot
+                                    exposure=exposure_snapshot,
                                 )
                             )
                             # Could emit a PortfolioRejectionObserved here
@@ -277,38 +296,58 @@ class TradingPipeline:
                         success = self.ctx.exposure.reserve_if_version_matches(
                             allocation_id=decision.token.reservation_identity,
                             required_version=exposure_snapshot.exposure_version,
-                            risk=decision.token.quantity * abs(candidate.priced_candidate.executable_entry_price - decision.token.effective_stop)
+                            risk=decision.token.quantity
+                            * abs(
+                                candidate.priced_candidate.executable_entry_price
+                                - decision.token.effective_stop
+                            ),
                         )
 
                         if success:
                             # 3. Phase 5 Durable Commit
-                            risk_amt = decision.token.quantity * abs(candidate.priced_candidate.executable_entry_price - decision.token.effective_stop)
-                            logger.success(f"Phase 5 ADMITTED {candidate.candidate_id}. Reserved risk {risk_amt}.")
+                            risk_amt = decision.token.quantity * abs(
+                                candidate.priced_candidate.executable_entry_price
+                                - decision.token.effective_stop
+                            )
+                            logger.success(
+                                f"Phase 5 ADMITTED {candidate.candidate_id}. Reserved risk {risk_amt}."
+                            )
 
-                            admitted_token = self.allocation_committer.commit_allocation(decision.token)
-                            logger.info(f"AllocationCommitter durably admitted token: {admitted_token.reservation_identity}")
+                            admitted_token = self.allocation_committer.commit_allocation(
+                                decision.token
+                            )
+                            logger.info(
+                                f"AllocationCommitter durably admitted token: {admitted_token.reservation_identity}"
+                            )
 
                             admitted_candidates.append(candidate)
 
                             import asyncio
+
                             asyncio.create_task(
                                 self.notification_policy.notify_phase5_admission(
                                     candidate=candidate,
                                     decision=decision,
                                     exposure=exposure_snapshot,
-                                    equity=equity_snapshot
+                                    equity=equity_snapshot,
                                 )
                             )
                             asyncio.create_task(
-                                self.notification_policy.notify_reservation_committed(admitted_token)
+                                self.notification_policy.notify_reservation_committed(
+                                    admitted_token
+                                )
                             )
 
                             # Stop after successful admission to evaluate next candidate with fresh exposure
                             break
                         else:
                             # 3. Phase 5 Durable Abort
-                            self.allocation_committer.abort_reservation(decision.token.reservation_identity, "CAS_CONFLICT")
-                            logger.warning(f"CAS conflict during Phase 5 reservation for {candidate.candidate_id}. Retrying...")
+                            self.allocation_committer.abort_reservation(
+                                decision.token.reservation_identity, "CAS_CONFLICT"
+                            )
+                            logger.warning(
+                                f"CAS conflict during Phase 5 reservation for {candidate.candidate_id}. Retrying..."
+                            )
 
             from marketpilot.dashboard.models import ProjectionMetadata
 
@@ -349,13 +388,15 @@ class TradingPipeline:
                 cycle_reason=reason,
                 intents_count=len(intents),
                 priced_count=priced_count,
-                evidence_evaluated_count=priced_count, # Since evidence evaluation happens for all priced candidates
+                evidence_evaluated_count=priced_count,  # Since evidence evaluation happens for all priced candidates
                 final_candidates_count=len(batch_result.candidates),
                 rejected_before_pricing_count=rejected_before_pricing_count,
                 rejected_at_evidence_count=rejected_at_evidence_count,
                 rejected_at_economics_count=rejected_at_economics_count,
                 candidates_count=len(batch_result.candidates),
-                evaluation_cadence_seconds=self.ctx.settings.daemon.evaluation_interval_seconds if hasattr(self.ctx.settings, 'daemon') else 60
+                evaluation_cadence_seconds=self.ctx.settings.daemon.evaluation_interval_seconds
+                if hasattr(self.ctx.settings, "daemon")
+                else 60,
             )
 
             repo.publish_daemon_evaluation(intelligence, evidence, metadata=meta)
@@ -366,12 +407,15 @@ class TradingPipeline:
             top_cand = batch_result.candidates[0] if batch_result.candidates else None
 
             import asyncio
+
             asyncio.create_task(
                 self.notification_policy.notify_cycle_summary(
                     cycle_id=event.ctx.cycle_id,
                     time_str=str(event.ctx.market_time),
                     mode=self.ctx.settings.execution_mode.value,
-                    env="MAINNET" if self.ctx.settings.execution_mode.value == "PAPER" else "UNKNOWN",
+                    env="MAINNET"
+                    if self.ctx.settings.execution_mode.value == "PAPER"
+                    else "UNKNOWN",
                     outcome=outcome,
                     universe_size=len(valid_snapshots),
                     market_qualified=len(valid_snapshots),
@@ -380,7 +424,11 @@ class TradingPipeline:
                     evidence_evaluated=priced_count,
                     eligible=len(batch_result.candidates),
                     admitted=len(admitted_candidates),
-                    rejected=len(batch_result.candidates) - len(admitted_candidates) + rejected_before_pricing_count + rejected_at_evidence_count + rejected_at_economics_count,
+                    rejected=len(batch_result.candidates)
+                    - len(admitted_candidates)
+                    + rejected_before_pricing_count
+                    + rejected_at_evidence_count
+                    + rejected_at_economics_count,
                     rejections_evidence=rejected_at_evidence_count,
                     rejections_economics=rejected_at_economics_count,
                     rejections_heat=locals().get("portfolio_rejections_heat", 0),
@@ -391,12 +439,14 @@ class TradingPipeline:
                     active_lineages=len(exp_snap.active_position_ids) if exp_snap else 0,
                     reservations=len(exp_snap.reserved_allocation_ids) if exp_snap else 0,
                     top_candidate=top_cand,
-                    top_decision=None
+                    top_decision=None,
                 )
             )
 
         except Exception as e:
-            logger.error(f"Cycle {event.ctx.cycle_id}: TradingPipeline Phase-4 orchestration failed: {e}")
+            logger.exception(
+                f"Cycle {event.ctx.cycle_id}: TradingPipeline Phase-4 orchestration failed: {e!r}"
+            )
 
         self.metrics.record_latency("trading_pipeline", (time.time() - start) * 1000)
         await self.bus.publish(CycleFinishedEvent(ctx=event.ctx))

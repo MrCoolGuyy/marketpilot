@@ -202,3 +202,12 @@ class MissionControlFactory:
             if val is None:
                 logger.error(f"MissionControlFactory Validation Failed: {field_name} is None")
                 raise RuntimeError(f"Dependency Injection Error: {field_name} failed to instantiate.")
+class Phase6LiveMutationDisabled(Exception):
+    pass
+
+class MutationTransportFactory:
+    @classmethod
+    def build_transport(cls, mode: ExecutionMode):
+        if mode == ExecutionMode.LIVE:
+            raise Phase6LiveMutationDisabled("LIVE mutation is structurally disabled in Phase 6")
+        return None
