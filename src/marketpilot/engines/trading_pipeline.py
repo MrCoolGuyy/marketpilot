@@ -338,6 +338,30 @@ class TradingPipeline:
                                 )
                             )
 
+                            if self.ctx.settings.execution_mode.value == "PAPER":
+                                from marketpilot.models.execution import ExecutionQuoteSnapshot
+                                quote_snap = ExecutionQuoteSnapshot(
+                                    quote_id=candidate.priced_candidate.quote.quote_id,
+                                    symbol=candidate.priced_candidate.quote.symbol,
+                                    bid=candidate.priced_candidate.quote.bid,
+                                    ask=candidate.priced_candidate.quote.ask,
+                                    source_market_timestamp=candidate.priced_candidate.quote.quote_timestamp, # Or datetime from float
+                                    received_at=candidate.priced_candidate.quote.quote_timestamp, # wait ExecutionQuoteSnapshot uses datetime
+                                    source=candidate.priced_candidate.quote.environment
+                                )
+                                # Need to convert floats to datetime.
+                                from datetime import datetime, UTC
+                                quote_snap = ExecutionQuoteSnapshot(
+                                    quote_id=candidate.priced_candidate.quote.quote_id,
+                                    symbol=candidate.priced_candidate.quote.symbol,
+                                    bid=candidate.priced_candidate.quote.bid,
+                                    ask=candidate.priced_candidate.quote.ask,
+                                    source_market_timestamp=datetime.fromtimestamp(candidate.priced_candidate.quote.quote_timestamp, UTC),
+                                    received_at=datetime.fromtimestamp(candidate.priced_candidate.quote.quote_timestamp, UTC),
+                                    source="BYBIT"
+                                )
+                                self.ctx.execution_coordinator.process_allocation(token=admitted_token, quote=quote_snap, take_profit=candidate.priced_candidate.intent.take_profit, environment="PAPER")
+
                             # Stop after successful admission to evaluate next candidate with fresh exposure
                             break
                         else:

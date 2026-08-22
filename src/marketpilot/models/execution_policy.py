@@ -34,8 +34,18 @@ class ExecutionReconciliationPolicy(BaseModel, frozen=True):
 
 
 class PaperExecutionPolicy(BaseModel, frozen=True):
-    version: str = "1.0.0"
+    version: str = "1.1.0"
     require_fresh_quote: Literal[True] = True
-    fee_rate_bps: Decimal = Decimal("5.5")
-    slippage_bps: Decimal = Decimal("2.0")
-    fill_behavior: Literal["DETERMINISTIC_FULL", "DETERMINISTIC_PARTIAL"] = "DETERMINISTIC_FULL"
+    max_quote_age_ms: int = 5000
+
+    # Friction
+    fee_class: Literal["TAKER", "MAKER"] = "TAKER"
+    taker_fee_bps: Decimal = Decimal("5.5")
+    fee_source: str = "default_configuration"
+    entry_slippage_bps: Decimal = Decimal("2.0")
+    exit_slippage_bps: Decimal = Decimal("2.0")
+
+    # Semantics
+    ambiguous_candle_policy: Literal["STOP_FIRST"] = "STOP_FIRST"
+    gap_semantics: Literal["CONSERVATIVE_GAP_FILL"] = "CONSERVATIVE_GAP_FILL"
+    fill_behavior: Literal["DETERMINISTIC_FULL"] = "DETERMINISTIC_FULL"

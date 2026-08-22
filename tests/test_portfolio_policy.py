@@ -10,7 +10,6 @@ def test_effective_risk_capital_boundaries():
     # 4. usable 28 -> effective 25 (allocated 25)
     policy = PortfolioPolicy(policy_version="1", allocated_capital=Decimal("25.0"), minimum_unallocated_buffer=Decimal("3.0"))
     assert policy.calculate_effective_risk_capital(Decimal("28.0")) == Decimal("25.0")
-
     # 5. usable 20 -> effective 17 (allocated 25)
     assert policy.calculate_effective_risk_capital(Decimal("20.0")) == Decimal("17.0")
 

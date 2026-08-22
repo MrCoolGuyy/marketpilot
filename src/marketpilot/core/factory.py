@@ -27,6 +27,9 @@ from marketpilot.engines.strategy_engine import StrategyEngine
 from marketpilot.engines.risk_engine import RiskEngine
 from marketpilot.engines.decision_audit_engine import DecisionAuditEngine
 from marketpilot.engines.execution_engine import ExecutionEngine
+from marketpilot.engines.execution_coordinator import ExecutionCoordinator
+from marketpilot.adapters.paper_execution_adapter import PaperAdapter
+from marketpilot.engines.paper_simulator import PaperSimulator
 from marketpilot.engines.reconciler_engine import ReconcilerEngine
 from marketpilot.engines.journal_engine import JournalEngine
 from marketpilot.engines.exposure_manager import ExposureManager
@@ -44,7 +47,7 @@ class RuntimeContext:
     cb: CircuitBreaker
     health: HealthMonitor
     watchdog: Watchdog
-    
+
     client: BybitClient
     market_data_fetcher: MarketDataFetcher
     snapshot_builder: InstrumentSnapshotBuilder
@@ -55,22 +58,24 @@ class RuntimeContext:
     risk: RiskEngine
     audit: DecisionAuditEngine
     execution: ExecutionEngine
+    execution_coordinator: ExecutionCoordinator
+    paper_adapter: PaperAdapter
     reconciler: ReconcilerEngine
     journal: JournalEngine
     exposure: ExposureManager
-    
+
     notifier: TelegramNotifier
     pipeline: TradingPipeline
-    
+
     # Optional Validation Service (if Phase 11 implemented)
     validation: Any = None
-    
+
     daemon_instance_id: Optional[str] = None
 
 
 class MissionControlFactory:
     """Modular factory to build and validate the dependency graph."""
-    
+
     @classmethod
     def build_core(cls, settings: AppSettings) -> dict:
         ts = SystemClock()
@@ -87,7 +92,7 @@ class MissionControlFactory:
             "health": health,
             "watchdog": watchdog,
         }
-        
+
     @classmethod
     def build_exchange(cls, settings: AppSettings) -> dict:
         if settings.execution_mode == ExecutionMode.DEMO:
@@ -102,18 +107,18 @@ class MissionControlFactory:
             )
         else:
             exchange_settings = settings.exchange
-            
+
         client = BybitClient(
-            exchange_settings=exchange_settings, 
+            exchange_settings=exchange_settings,
             execution_mode=settings.execution_mode
         )
         return {"client": client}
-        
+
     @classmethod
     def build_market_data(cls, exchange: dict) -> dict:
         fetcher = MarketDataFetcher(exchange["client"])
         return {"market_data_fetcher": fetcher}
-        
+
     @classmethod
     def build_engines(cls, settings: AppSettings, core: dict, exchange: dict) -> dict:
         scanner = ScannerEngine(settings.scanner)
@@ -126,9 +131,12 @@ class MissionControlFactory:
         reconciler = ReconcilerEngine()
         journal = JournalEngine()
         exposure = ExposureManager()
-        
+
+        simulator = PaperSimulator()
+        paper_adapter = PaperAdapter(simulator, settings.paper, settings.portfolio)
+
         builder = InstrumentSnapshotBuilder(indicator)
-        
+
         return {
             "snapshot_builder": builder,
             "scanner": scanner,
@@ -141,24 +149,25 @@ class MissionControlFactory:
             "reconciler": reconciler,
             "journal": journal,
             "exposure": exposure,
+            "paper_adapter": paper_adapter,
         }
-        
+
     @classmethod
     def build_notifications(cls, settings: AppSettings) -> TelegramNotifier:
         return TelegramNotifier(settings.telegram)
-        
+
     @classmethod
     def build_runtime(cls, settings: AppSettings | None = None) -> RuntimeContext:
         """Builds the complete dependency graph and validates it."""
         if settings is None:
             settings = AppSettings()
-            
+
         core = cls.build_core(settings)
         exchange = cls.build_exchange(settings)
         market_data = cls.build_market_data(exchange)
         engines = cls.build_engines(settings, core, exchange)
         notifier = cls.build_notifications(settings)
-        
+
         ctx = RuntimeContext(
             settings=settings,
             ts=core["ts"],
@@ -180,18 +189,28 @@ class MissionControlFactory:
             reconciler=engines["reconciler"],
             journal=engines["journal"],
             exposure=engines["exposure"],
+            execution_coordinator=None,  # type: ignore
+            paper_adapter=engines["paper_adapter"],
             notifier=notifier,
             pipeline=None  # type: ignore
         )
-        
+
         pipeline = TradingPipeline(ctx)
-        
-        # Patch the context with the created pipeline (cyclic reference)
+
+        coordinator = ExecutionCoordinator(
+            journal=engines["journal"],
+            exposure=engines["exposure"],
+            paper_adapter=engines["paper_adapter"],
+            notification_policy=notifier
+        )
+
+        # Patch the context with the created objects
         object.__setattr__(ctx, "pipeline", pipeline)
-        
+        object.__setattr__(ctx, "execution_coordinator", coordinator)
+
         cls._validate_dependencies(ctx)
         return ctx
-        
+
     @classmethod
     def _validate_dependencies(cls, ctx: RuntimeContext) -> None:
         """Ensures no engine is None before the runtime is returned."""
